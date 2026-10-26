@@ -6,11 +6,19 @@
 nextflow.enable.dsl=2
 
 params.database_path = null
-params.log_file = "$projectDir/pipeline.log" 
 params.sample = "sample.csv"
 params.genome = ""
 params.tool = ""
 params.cleanup = false 
+params.type = "genome"
+// Clinical-data options (feature/clinical-bam)
+params.outdir = null              // results root; default $projectDir/RESULTS (previous behaviour)
+params.targets = null             // capture BED for --type exome|panel: Mutect2 shards, Strelka regions, mosdepth, CNVkit, BQSR
+params.target_padding = 100       // bp added on each side of --targets
+params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
+params.results_dir = params.outdir ?: "$projectDir/RESULTS"
+params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
+new File(params.log_file).parentFile.mkdirs()
 
 // Initialize the log file with a header
 new File(params.log_file).text = """
@@ -176,6 +184,32 @@ if (!params.genomes.containsKey(params.genome)) {
     error "Invalid genome: ${params.genome}. Available options are: ${params.genomes.keySet().join(', ')}"
 }
 
+// Validate analysis type. "panel" is targeted like "exome" but requires --targets and skips genome-wide CN/SV callers.
+if (!(params.type in ['genome', 'exome', 'panel'])) {
+    error "Invalid --type '${params.type}'. Use genome, exome or panel."
+}
+params.targeted = params.type in ['exome', 'panel']
+if (params.type == 'panel' && !params.targets) {
+    error "--type panel needs --targets <capture BED> (same contig names as --ref)."
+}
+if (params.targets && !params.targeted) {
+    error "--targets is only used with --type exome or --type panel."
+}
+if (params.targets && !file(params.targets).exists()) {
+    error "--targets file not found: ${params.targets}"
+}
+if (params.type == 'panel') {
+    def tools = params.tool ? params.tool.toString().split(',').collect { it.trim() } : []
+    def unsuitable = tools.findAll { it in ['ascat', 'delly'] }
+    if (unsuitable) {
+        error "--tool ${unsuitable.join(',')} is not supported with --type panel: ASCAT needs genome-wide allele frequencies and " +
+              "Delly needs genome-wide coverage. Use cnvkit (and manta only if the panel baits fusion introns)."
+    }
+}
+if (!(params.contig_rename in ['auto', 'none'])) {
+    error "--contig_rename must be auto or none."
+}
+
 // Check if user inputs custom ref or not
 params.custom_ref = (params.ref && params.ref != params.genomes[params.genome].ref)
 
@@ -197,11 +231,11 @@ params.bed = params.bed ?: params.genomes[params.genome].bed
 params.bed_tbi = params.bed_tbi ?: "${params.bed}.tbi"
 params.conpair_marker = params.conpair_marker ?: params.genomes[params.genome].conpair_marker
 params.conpair_marker_txt = params.conpair_marker_txt ?: params.genomes[params.genome].conpair_marker_txt
-params.mosdepth_bed = params.mosdepth_bed ?: params.genomes[params.genome].mosdepth_bed
+params.mosdepth_bed = params.mosdepth_bed ?: (params.targets ?: params.genomes[params.genome].mosdepth_bed)
 params.muse_vcf = params.muse_vcf ?: params.genomes[params.genome].muse_vcf
 params.recal_knownsite1 = params.recal_knownsite1 ?: params.genomes[params.genome].recal_knownsite1
 params.recal_knownsite2 = params.recal_knownsite2 ?: params.genomes[params.genome].recal_knownsite2
-params.recal_interval_wes = params.recal_interval_wes ?: params.genomes[params.genome].recal_interval_wes
+params.recal_interval_wes = params.recal_interval_wes ?: (params.targets ?: params.genomes[params.genome].recal_interval_wes)
 params.delly_excl = params.delly_excl ?: params.genomes[params.genome].delly_excl
 
 // Set SAGE-specific parameters
@@ -259,6 +293,9 @@ Project Dir    : ${projectDir}
 Analysis Parameters:
 ==============================================
 Analysis Type  : ${params.type}
+Targets        : ${params.targets ?: 'none'} (padding ${params.target_padding} bp)
+Contig rename  : ${params.contig_rename}
+Results        : ${params.results_dir}
 Genome         : ${params.genome}
 ==============================================
 Reference Files:
@@ -274,28 +311,28 @@ ${available_tools.join(', ')}
 ==============================================
 """
 
-params.bam_dir="$projectDir/RESULTS/BAM"
-params.report_dir="$projectDir/RESULTS/REPORT"
+params.bam_dir="${params.results_dir}/BAM"
+params.report_dir="${params.results_dir}/REPORT"
 params.manta_bed="${params.database_path}/GRCh38_ref/manta.bed.gz"
 params.mkdup_temp_dir="$projectDir/mkdup_tmp"
-params.FASTQC_dir="$projectDir/RESULTS/FASTQC"
-params.mkdup_dir="$projectDir/RESULTS/MKDUP"
-params.recal_dir="$projectDir/RESULTS/RECALIBRATE"
+params.FASTQC_dir="${params.results_dir}/FASTQC"
+params.mkdup_dir="${params.results_dir}/MKDUP"
+params.recal_dir="${params.results_dir}/RECALIBRATE"
 params.SAGE_jar="${params.database_path}/SAGE/sage_v4.2.jar"
-params.SAGE_dir="$projectDir/RESULTS/SAGE"
-params.strelka_dir="$projectDir/RESULTS/STRELKA"
-params.muse_dir="$projectDir/RESULTS/MuSE"
-params.MUTECT2_dir="$projectDir/RESULTS/Mutect2"
-params.mosdepth_dir="$projectDir/RESULTS/mosdepth"
-params.conpair_dir="$projectDir/RESULTS/Conpair"
-params.cnvkit_dir="$projectDir/RESULTS/CNVkit"
-params.Delly_dir="$projectDir/RESULTS/Delly"
-params.ascat_dir="$projectDir/RESULTS/ASCAT"
+params.SAGE_dir="${params.results_dir}/SAGE"
+params.strelka_dir="${params.results_dir}/STRELKA"
+params.muse_dir="${params.results_dir}/MuSE"
+params.MUTECT2_dir="${params.results_dir}/Mutect2"
+params.mosdepth_dir="${params.results_dir}/mosdepth"
+params.conpair_dir="${params.results_dir}/Conpair"
+params.cnvkit_dir="${params.results_dir}/CNVkit"
+params.Delly_dir="${params.results_dir}/Delly"
+params.ascat_dir="${params.results_dir}/ASCAT"
 params.conpair="${params.database_path}/Conpair-0.2"
-params.manta_dir="$projectDir/RESULTS/MANTA"
-params.post_dir="$projectDir/RESULTS/POST"
-params.intervals_dir="$projectDir/RESULTS/custom_intervals"
-params.VAF_dir="$projectDir/RESULTS/POST/VAF"
+params.manta_dir="${params.results_dir}/MANTA"
+params.post_dir="${params.results_dir}/POST"
+params.intervals_dir="${params.results_dir}/custom_intervals"
+params.VAF_dir="${params.results_dir}/POST/VAF"
 
 params.bwamem2_env = "$projectDir/yml/bwamem2.yml"
 params.mkdup_env = "$projectDir/yml/picard.yml"
@@ -303,6 +340,7 @@ params.conpair_env = "$projectDir/yml/conpair.yml"
 params.samtools_env = "$projectDir/yml/samtools.yml"
 params.strelka_env = "$projectDir/yml/strelka_env.yml"
 params.mosdepth_env = "$projectDir/yml/mosdepth_env.yml"
+params.rename_bam_env = "$projectDir/yml/rename_bam.yml"
 params.fastqc_env = "$projectDir/yml/fastqc_env.yml"
 params.cnvkit_env = "$projectDir/yml/cnvkit.yml"
 params.delly_env = "$projectDir/yml/delly.yml"
@@ -392,6 +430,9 @@ include { CalculateContamination } from './Modules/Mutect2/CalculateContaminatio
 include { FilterMutectCalls } from './Modules/Mutect2/FilterMutectCalls'
 
 include { RENAME_BAM_HEADER } from './Modules/RENAME_BAM_HEADER'
+include { PREPARE_TARGETS } from './Modules/TARGETS/PREPARE_TARGETS'
+include { GENERATE_TARGET_INTERVALS } from './Modules/TARGETS/GENERATE_TARGET_INTERVALS'
+include { POST_TUMOR_ONLY } from './Modules/POST_TUMOR_ONLY'
 include { GENERATE_INTERVALS } from './Modules/GENERATE_INTERVALS'
 
 include { POST } from './Modules/POST.nf'
@@ -415,6 +456,66 @@ include { SAVE_CSV_MuSE } from './Modules/SAVE_CSV/SAVE_CSV_MuSE'
 include { SAVE_CSV_Mutect2 } from './Modules/SAVE_CSV/SAVE_CSV_Mutect2'
 include { SAVE_CSV_CONPAIR } from './Modules/SAVE_CSV/SAVE_CSV_CONPAIR'
 include { SAVE_CSV_MOSDEPTH } from './Modules/SAVE_CSV/SAVE_CSV_MOSDEPTH'
+
+// Sample-sheet checks and tumour-only routing (feature/clinical-bam).
+// Reads only the sheet (IDs and paths), never a BAM. Tumours without a normal used to vanish silently at
+// normal.cross(tumor); now they are called tumour-only (--first_step variant_calling) or the run stops.
+def sheetFile = file(params.sample)
+def tumorOnlyPatients = [] as Set
+if (sheetFile.exists()) {
+    def lines = sheetFile.readLines().findAll { it.trim() }
+    def header = lines[0].split(',').collect { it.trim() }
+    def iP = header.indexOf('patient')
+    def iS = header.indexOf('sample')
+    def iT = header.indexOf('status')
+    if (iP < 0 || iS < 0 || iT < 0) {
+        error "Sample sheet ${params.sample} needs patient, sample and status columns"
+    }
+    def problems = []
+    def normals = [:].withDefault { 0 }
+    def tumors = [:].withDefault { 0 }
+    def seen = [] as Set
+    lines.drop(1).eachWithIndex { line, k ->
+        def f = line.split(',', -1).collect { it.trim() }
+        if (f.size() != header.size()) {
+            problems << "line ${k + 2}: ${f.size()} fields but the header has ${header.size()} (comma inside a field?)"
+            return
+        }
+        def pt = f[iP]
+        def sm = f[iS]
+        def st = f[iT]
+        if (!(st in ['tumor', 'normal'])) {
+            problems << "line ${k + 2}: status must be tumor or normal"
+        }
+        // output names are <patient>_<sample>_<status>; ASCAT-exome splits file names on _normal_ / _tumor_
+        if ([pt, sm].any { "_${it}_".contains('_normal_') || "_${it}_".contains('_tumor_') }) {
+            problems << "line ${k + 2}: 'tumor'/'normal' must not appear as an underscore-separated word in patient or sample IDs"
+        }
+        if (!seen.add([pt, sm, st])) problems << "line ${k + 2}: duplicate patient,sample,status"
+        if (st == 'normal') normals[pt] += 1
+        if (st == 'tumor') tumors[pt] += 1
+    }
+    // normal.cross(tumor) would emit one pair per normal x tumour
+    normals.findAll { it.value > 1 }.each { problems << "a patient has ${it.value} normal rows; keep one" }
+    if (problems) {
+        error "Sample sheet ${params.sample}:\n  " + problems.join('\n  ')
+    }
+    tumorOnlyPatients = (tumors.keySet() - normals.keySet()) as Set
+    def nPaired = tumors.keySet().intersect(normals.keySet()).size()
+    log.info "Sample sheet: ${nPaired} patient(s) with a matched normal, ${tumorOnlyPatients.size()} tumour-only"
+    if (tumorOnlyPatients && params.first_step != 'variant_calling') {
+        error "${tumorOnlyPatients.size()} patient(s) have a tumour but no normal. Tumour-only calling is supported with " +
+              "--first_step variant_calling (processed BAMs); run those samples separately."
+    }
+    if (tumorOnlyPatients) {
+        def report = new File("${params.results_dir}/REPORT/tumor_only_patients.txt")
+        report.parentFile.mkdirs()
+        report.text = tumorOnlyPatients.sort().join('\n') + '\n'
+        log.warn "${tumorOnlyPatients.size()} tumour-only patient(s): Mutect2 + SAGE tumour-only, consensus in POST/tumor_only " +
+                 "(Strelka2, MuSE, Conpair, ASCAT, Delly and Manta need a normal). List: REPORT/tumor_only_patients.txt"
+    }
+}
+params.tumor_only_patients = tumorOnlyPatients
 
 // Define a workflow completion handler
 workflow.onComplete {
@@ -447,16 +548,25 @@ def isToolSelected(String tool) {
 workflow {
     chunk = Channel.of(1..20)
 
-    // Check if need to build custom intervals from user provided ref fa file
-    if (params.custom_ref) {
-    GENERATE_INTERVALS(
-        file(params.ref),
-        file(params.ref_fai),
-        file(params.ref_dict)
-    )
-    interval_dir_ch = GENERATE_INTERVALS.out.interval_dir
+    // Mutect2/GetPileupSummaries shards: over --targets when given, else whole chromosomes of a custom ref,
+    // else the database's prebuilt shards. Strelka call regions: padded targets, else the callable-regions --bed.
+    if (params.targets) {
+        PREPARE_TARGETS(file(params.targets), file(params.ref_fai))
+        GENERATE_TARGET_INTERVALS(PREPARE_TARGETS.out.padded_bed, file(params.ref), file(params.ref_fai), file(params.ref_dict))
+        interval_dir_ch = GENERATE_TARGET_INTERVALS.out.interval_dir
+        strelka_regions_ch = PREPARE_TARGETS.out.call_regions
     } else {
-        interval_dir_ch = Channel.value(file(params.mutect2_interval_dir))
+        if (params.custom_ref) {
+            GENERATE_INTERVALS(
+                file(params.ref),
+                file(params.ref_fai),
+                file(params.ref_dict)
+            )
+            interval_dir_ch = GENERATE_INTERVALS.out.interval_dir
+        } else {
+            interval_dir_ch = Channel.value(file(params.mutect2_interval_dir))
+        }
+        strelka_regions_ch = Channel.value([file(params.bed), file(params.bed_tbi)])
     }
     
     // Sanity check for ascat input format
@@ -645,7 +755,7 @@ workflow {
                 [meta.patient, meta, bam, bai]
             } | set { sample_sheet }
 
-            if (params.type == "exome" && params.genome in ['GRCh38', 'GRCh37']) {
+            if (params.targeted && params.genome in ['GRCh38', 'GRCh37']) {
                 RECALIBRATE_BaseRecal_exome(sample_sheet).set{ RECALIBRATE_BaseRecal_out }
                 RECALIBRATE_BQSR_exome(RECALIBRATE_BaseRecal_out.BQSR_input).set { RECALIBRATE_out }
             } else if (params.type == "genome" && params.genome in ['GRCh38', 'GRCh37']) {
@@ -674,7 +784,7 @@ workflow {
                 }
             }
         } else {
-            if (params.type == "exome" && params.genome in ['GRCh38', 'GRCh37']) {
+            if (params.targeted && params.genome in ['GRCh38', 'GRCh37']) {
                 RECALIBRATE_BaseRecal_exome(MKDUP_out.pair_mutect).set{ RECALIBRATE_BaseRecal_out }
                 RECALIBRATE_BQSR_exome(RECALIBRATE_BaseRecal_out.BQSR_input).set { RECALIBRATE_out }
             } else if (params.type == "genome" && params.genome in ['GRCh38', 'GRCh37']) {
@@ -776,19 +886,28 @@ workflow {
             // Collect all normal bams for CNVkit and Delly
             normal.map { patient, meta, bam, bai -> [bam, bai] }.flatten().collect().set { normal_bams }
 
+            // Tumour-only patients (no normal row): same maps with normal = null. Mutect2, SAGE, mosdepth and
+            // CNVkit (against the pooled normals) handle that; Strelka2, MuSE, Conpair, ASCAT, Delly and Manta get pairs only.
+            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
+                [patient:patient, normal:null, tumor:bam, tumor_meta:meta, normal_meta:null]
+            }.set { TUMOR_ONLY_MAP }
+            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
+                [patient:patient, gender:meta.sex, normal:null, tumor:bam, sample:meta.sample]
+            }.set { TUMOR_ONLY_MAP_CN }
+
             if (params.genome in ['GRCh38', 'GRCh37']) {
-                SAGE(RECALIBRATE_out_MAP)
+                SAGE(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
             }
             
-            STRELKA(RECALIBRATE_out_MAP)
+            STRELKA(RECALIBRATE_out_MAP, strelka_regions_ch)
             MuSE(RECALIBRATE_out_MAP)
             
             if (params.genome in ['GRCh38', 'GRCh37']) {
                 CONPAIR(RECALIBRATE_out_MAP)
-                MOSDEPTH(RECALIBRATE_out_MAP)
+                MOSDEPTH(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
             }
 
-            MUTECT2_CALLING(RECALIBRATE_out_MAP, chunk, interval_dir_ch).set { MUTECT2_CALLING_out }
+            MUTECT2_CALLING(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP), chunk, interval_dir_ch).set { MUTECT2_CALLING_out }
             MUTECT2_CALLING_out.LearnReadOrientationModel_input.groupTuple(by:0).set { LearnReadOrientationModel_input_pair }
             MUTECT2_CALLING_out.MergeMutectStats_input.groupTuple(by:0).set { MergeMutectStats_input_pair }
             MUTECT2_CALLING_out.MergeVcfs_input.groupTuple(by:0).set { MergeVcfs_input_pair }
@@ -810,7 +929,11 @@ workflow {
                 [patient:normal[0], normal:normal[2],tumor:tumor[2], tumor_meta:tumor[1]]
             }.set{ GETpileUP_out_MAP }
 
-            CalculateContamination(GETpileUP_out_MAP).set { CalculateContamination_out }
+            GETpileUP_tumor.filter { it[0] in params.tumor_only_patients }.map { t ->
+                [patient:t[0], normal:null, tumor:t[2], tumor_meta:t[1]]
+            }.set { GETpileUP_tumor_only_MAP }
+
+            CalculateContamination(GETpileUP_out_MAP.mix(GETpileUP_tumor_only_MAP)).set { CalculateContamination_out }
             def vcfChannel = MergeVcfs_out.MUTECT2_vcf
                 .map{ map, vcf ->
                     ["${map.patient}_${map.tumor_meta.sample}", [map, vcf]]
@@ -850,7 +973,7 @@ workflow {
             // ASCAT
             if (params.tool && params.tool.contains('ascat')) {
                 chromosomes = Channel.of( *(1..22).collect { it.toString() } + ['X'] )
-                if (params.type == "exome") {
+                if (params.targeted) {
                     ASCAT_allelecount(RECALIBRATE_out_MAP_CN, chromosomes)
 
                     ASCAT_allelecount.out.allelecount
@@ -894,12 +1017,12 @@ workflow {
             // CNVkit
             if (params.tool && params.tool.contains('cnvkit')) {
                 CNVkit_buildcnn(normal_bams).set { CNVkit_buildcnn_out }
-                CNVkit(RECALIBRATE_out_MAP_CN, CNVkit_buildcnn_out.CNVkit_ref_cnn).set { CNVkit_out }
+                CNVkit(RECALIBRATE_out_MAP_CN.mix(TUMOR_ONLY_MAP_CN), CNVkit_buildcnn_out.CNVkit_ref_cnn).set { CNVkit_out }
             }
 
             // Delly
             if (params.tool && params.tool.contains('delly')) {
-                if (params.type == 'exome') {
+                if (params.targeted) {
                     log.error "ERROR: Delly is not recommended for exome data. Please use a different SV caller (manta) for exome data"
                     exit 1  
                 } else {
@@ -949,7 +1072,7 @@ workflow {
                 SAGE(RECALIBRATE_out_MAP)
             }
 
-            STRELKA(RECALIBRATE_out_MAP)
+            STRELKA(RECALIBRATE_out_MAP, strelka_regions_ch)
             MuSE(RECALIBRATE_out_MAP)
             
             if (params.genome in ['GRCh38', 'GRCh37']) {
@@ -1021,7 +1144,7 @@ workflow {
 	    // ASCAT
 	    if (params.tool && params.tool.contains('ascat')) {
 	        chromosomes = Channel.of( *(1..22).collect { it.toString() } + ['X'] )
-	        if (params.type == "exome") {
+	        if (params.targeted) {
 	            ASCAT_allelecount(RECALIBRATE_out_MAP_CN, chromosomes)
 	
 	            ASCAT_allelecount.out.allelecount
@@ -1070,7 +1193,7 @@ workflow {
 	
 	    // Delly
 	    if (params.tool && params.tool.contains('delly')) {
-	        if (params.type == 'exome' && params.tool.toString().contains('delly')) {
+	        if (params.targeted && params.tool.toString().contains('delly')) {
 	            log.error "ERROR: Delly is not recommended for exome data. Please use a different SV caller (manta) for exome data"
 	            exit 1  
 	        } else {
@@ -1125,6 +1248,17 @@ workflow {
                 ["${map.patient}_${map.tumor_meta.sample}", [map, vcf]]
             }
         
+        // Tumour-only consensus (Mutect2 + SAGE). Paired samples go on to the 4-caller scenarios below;
+        // tumour-only ones drop out of those joins because MuSE/Strelka2 never ran for them.
+        FilterMutectCalls.out.Mutect2_out
+            .filter { map, vcf -> !map.normal }
+            .map { map, vcf -> ["${map.patient}_${map.tumor_meta.sample}", vcf] }
+            .join(SAGE.out.SAGE_out
+                .filter { map, vcf -> !map.normal }
+                .map { map, vcf -> ["${map.patient}_${map.tumor_meta.sample}", vcf] })
+            .set { tumorOnlyPostInput }
+        POST_TUMOR_ONLY(tumorOnlyPostInput)
+
         // Recreate recalChannel from the available data
         // Choose the source based on first_step
         sourceChannel = (params.first_step == "variant_calling") ? 

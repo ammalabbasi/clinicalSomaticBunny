@@ -10,6 +10,7 @@ process STRELKA {
 
     input:
     val(map)
+    tuple path(call_regions), path(call_regions_tbi)
 
     output:
     path("*.somatic_indels.vcf.gz"), emit: STRELKA_indels
@@ -20,28 +21,15 @@ process STRELKA {
 
 
     script:
-    if (params.type == "exome")
-
-        """
-        configureStrelkaSomaticWorkflow.py --referenceFasta ${params.ref} --normalBam ${map.normal} --tumorBam ${map.tumor} --runDir strelka --exome
-
-        python2 strelka/runWorkflow.py -m local -j ${task.cpus}
-
-        mv strelka/results/variants/somatic.indels.vcf.gz     ${map.patient}_${map.tumor_meta.sample}.somatic_indels.vcf.gz
-        mv strelka/results/variants/somatic.indels.vcf.gz.tbi ${map.patient}_${map.tumor_meta.sample}.somatic_indels.vcf.gz.tbi
-        mv strelka/results/variants/somatic.snvs.vcf.gz       ${map.patient}_${map.tumor_meta.sample}.somatic_snvs.vcf.gz
-        mv strelka/results/variants/somatic.snvs.vcf.gz.tbi   ${map.patient}_${map.tumor_meta.sample}.somatic_snvs.vcf.gz.tbi
-        """
-    else
-        """
-        configureStrelkaSomaticWorkflow.py --referenceFasta ${params.ref} --normalBam ${map.normal} --tumorBam ${map.tumor} --runDir strelka --callRegions ${params.bed}
-
-        python2 strelka/runWorkflow.py -m local -j ${task.cpus}
-
-        mv strelka/results/variants/somatic.indels.vcf.gz     ${map.patient}_${map.tumor_meta.sample}.somatic_indels.vcf.gz
-        mv strelka/results/variants/somatic.indels.vcf.gz.tbi ${map.patient}_${map.tumor_meta.sample}.somatic_indels.vcf.gz.tbi
-        mv strelka/results/variants/somatic.snvs.vcf.gz       ${map.patient}_${map.tumor_meta.sample}.somatic_snvs.vcf.gz
-        mv strelka/results/variants/somatic.snvs.vcf.gz.tbi   ${map.patient}_${map.tumor_meta.sample}.somatic_snvs.vcf.gz.tbi
-        """
+    // genome: callable regions (--bed). exome/panel: --exome (no depth filters), restricted to --targets when given.
+    def exome_flag = params.targeted ? "--exome" : ""
+    def regions = (params.targeted && !params.targets) ? "" : "--callRegions ${call_regions}"
+    """
+    configureStrelkaSomaticWorkflow.py --referenceFasta ${params.ref} --normalBam ${map.normal} --tumorBam ${map.tumor} --runDir strelka ${exome_flag} ${regions}
+    python2 strelka/runWorkflow.py -m local -j ${task.cpus}
+    mv strelka/results/variants/somatic.indels.vcf.gz     ${map.patient}_${map.tumor_meta.sample}.somatic_indels.vcf.gz
+    mv strelka/results/variants/somatic.indels.vcf.gz.tbi ${map.patient}_${map.tumor_meta.sample}.somatic_indels.vcf.gz.tbi
+    mv strelka/results/variants/somatic.snvs.vcf.gz       ${map.patient}_${map.tumor_meta.sample}.somatic_snvs.vcf.gz
+    mv strelka/results/variants/somatic.snvs.vcf.gz.tbi   ${map.patient}_${map.tumor_meta.sample}.somatic_snvs.vcf.gz.tbi
+    """
 }
-

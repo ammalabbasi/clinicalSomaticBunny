@@ -16,7 +16,7 @@ process MuSE {
     script:
     def dbsnp_param = params.muse_vcf ? "-D ${params.muse_vcf}" : ""
     
-    if (params.type == "exome")
+    if (params.targeted)
         """
         MuSE call -f ${params.ref} -n ${task.cpus} -O ${map.patient}_${map.tumor_meta.sample} ${map.tumor} ${map.normal}
 

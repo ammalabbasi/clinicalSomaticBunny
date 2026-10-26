@@ -18,7 +18,7 @@ process CNVkit {
 
     script:
     def output_prefix = "${map.patient}_${map.sample}"
-    def method_option = params.type == "exome" ? "" : "--method wgs"
+    def method_option = params.targeted ? "" : "--method wgs"
 
     """
     export PYTHONNOUSERSITE=1

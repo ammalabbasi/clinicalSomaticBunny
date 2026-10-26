@@ -30,7 +30,7 @@ process CNVkit_buildcnn {
         .collect { "\"${it}\"" }
         .join(" ")
 
-    if (params.type == "exome") {
+    if (params.targeted) {
         """
         export PYTHONNOUSERSITE=1
         unset PYTHONPATH

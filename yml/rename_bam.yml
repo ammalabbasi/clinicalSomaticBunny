@@ -1,0 +1,10 @@
+name: rename_bam
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  - picard=3.4.0
+  - openjdk=17
+  - samtools=1.24

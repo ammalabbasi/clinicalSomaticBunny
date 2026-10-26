@@ -18,7 +18,7 @@ process MANTA {
     tuple val(map), path("*candidateSmallIndels.vcf.gz*"), emit: MANTA_candidateSmallIndels
 
     script:
-    if (params.type == "exome") {
+    if (params.targeted) {
         """
         configManta.py \
         --normalBam ${map.normal} \
