@@ -18,7 +18,7 @@ params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
-new File(params.log_file).parentFile.mkdirs()
+new File(params.log_file).absoluteFile.parentFile.mkdirs()
 
 // Initialize the log file with a header
 new File(params.log_file).text = """
@@ -231,11 +231,37 @@ params.bed = params.bed ?: params.genomes[params.genome].bed
 params.bed_tbi = params.bed_tbi ?: "${params.bed}.tbi"
 params.conpair_marker = params.conpair_marker ?: params.genomes[params.genome].conpair_marker
 params.conpair_marker_txt = params.conpair_marker_txt ?: params.genomes[params.genome].conpair_marker_txt
-params.mosdepth_bed = params.mosdepth_bed ?: (params.targets ?: params.genomes[params.genome].mosdepth_bed)
+
+// Clean --targets once (gunzip, drop track/browser/# lines, keep 3 columns) and check its contigs against --ref,
+// so mosdepth, CNVkit and BQSR read the same clean BED that PREPARE_TARGETS pads for Mutect2 and Strelka.
+def targetsClean = null
+if (params.targets) {
+    def faiContigs = file(params.ref_fai).readLines().collect { it.split('\t')[0] } as Set
+    def src = file(params.targets)
+    def rawLines = src.name.endsWith('.gz') ?
+        new java.util.zip.GZIPInputStream(src.newInputStream()).newReader().readLines() : src.readLines()
+    def rows = rawLines.findAll { it.trim() && !(it ==~ /^(track|browser|#).*/) }
+        .collect { it.split('\t') }
+        .findAll { it.size() >= 3 }
+    if (!rows) {
+        error "--targets has no BED intervals: ${params.targets}"
+    }
+    def missing = rows.collect { it[0] }.unique().findAll { !(it in faiContigs) }
+    if (missing) {
+        error "--targets uses contigs that are not in --ref: ${missing.take(5).join(' ')} " +
+              "(chr prefix mismatch? the BED must use the same contig names as the reference)"
+    }
+    def out = new File("${params.results_dir}/custom_intervals/targets.clean.bed")
+    out.parentFile.mkdirs()
+    out.text = rows.collect { "${it[0]}\t${it[1]}\t${it[2]}" }.join('\n') + '\n'
+    targetsClean = out.absolutePath
+}
+params.targets_clean = targetsClean
+params.mosdepth_bed = params.mosdepth_bed ?: (params.targets_clean ?: params.genomes[params.genome].mosdepth_bed)
 params.muse_vcf = params.muse_vcf ?: params.genomes[params.genome].muse_vcf
 params.recal_knownsite1 = params.recal_knownsite1 ?: params.genomes[params.genome].recal_knownsite1
 params.recal_knownsite2 = params.recal_knownsite2 ?: params.genomes[params.genome].recal_knownsite2
-params.recal_interval_wes = params.recal_interval_wes ?: (params.targets ?: params.genomes[params.genome].recal_interval_wes)
+params.recal_interval_wes = params.recal_interval_wes ?: (params.targets_clean ?: params.genomes[params.genome].recal_interval_wes)
 params.delly_excl = params.delly_excl ?: params.genomes[params.genome].delly_excl
 
 // Set SAGE-specific parameters
@@ -476,9 +502,15 @@ if (sheetFile.exists()) {
     def tumors = [:].withDefault { 0 }
     def seen = [] as Set
     lines.drop(1).eachWithIndex { line, k ->
-        def f = line.split(',', -1).collect { it.trim() }
+        def f = line.split(',', -1) as List
         if (f.size() != header.size()) {
             problems << "line ${k + 2}: ${f.size()} fields but the header has ${header.size()} (comma inside a field?)"
+            return
+        }
+        // splitCsv below keeps spaces and strips quotes, so IDs read here must already be clean or the
+        // tumour-only routing (matched on patient ID) would miss them.
+        if (f.any { it != it.trim() || it.contains('"') }) {
+            problems << "line ${k + 2}: remove spaces, quotes or Windows line endings (\\r) around values"
             return
         }
         def pt = f[iP]
@@ -487,8 +519,9 @@ if (sheetFile.exists()) {
         if (!(st in ['tumor', 'normal'])) {
             problems << "line ${k + 2}: status must be tumor or normal"
         }
-        // output names are <patient>_<sample>_<status>; ASCAT-exome splits file names on _normal_ / _tumor_
-        if ([pt, sm].any { "_${it}_".contains('_normal_') || "_${it}_".contains('_tumor_') }) {
+        // ASCAT-exome splits file names (<patient>_<sample>_<status>_...) on _normal_ / _tumor_
+        def ascatSelected = params.tool.toString().split(',').collect { it.trim() }.contains('ascat')
+        if (ascatSelected && [pt, sm].any { "_${it}_".contains('_normal_') || "_${it}_".contains('_tumor_') }) {
             problems << "line ${k + 2}: 'tumor'/'normal' must not appear as an underscore-separated word in patient or sample IDs"
         }
         if (!seen.add([pt, sm, st])) problems << "line ${k + 2}: duplicate patient,sample,status"
@@ -501,6 +534,11 @@ if (sheetFile.exists()) {
         error "Sample sheet ${params.sample}:\n  " + problems.join('\n  ')
     }
     tumorOnlyPatients = (tumors.keySet() - normals.keySet()) as Set
+    // CNVkit builds its reference from the pooled normals; with none, collect() emits nothing and CNVkit
+    // would silently never run.
+    if (params.tool.toString().split(',').collect { it.trim() }.contains('cnvkit') && normals.isEmpty()) {
+        error "--tool cnvkit needs at least one normal row in the sample sheet (its reference is built from the pooled normals)."
+    }
     def nPaired = tumors.keySet().intersect(normals.keySet()).size()
     log.info "Sample sheet: ${nPaired} patient(s) with a matched normal, ${tumorOnlyPatients.size()} tumour-only"
     if (tumorOnlyPatients && params.first_step != 'variant_calling') {
@@ -551,7 +589,7 @@ workflow {
     // Mutect2/GetPileupSummaries shards: over --targets when given, else whole chromosomes of a custom ref,
     // else the database's prebuilt shards. Strelka call regions: padded targets, else the callable-regions --bed.
     if (params.targets) {
-        PREPARE_TARGETS(file(params.targets), file(params.ref_fai))
+        PREPARE_TARGETS(file(params.targets_clean), file(params.ref_fai))
         GENERATE_TARGET_INTERVALS(PREPARE_TARGETS.out.padded_bed, file(params.ref), file(params.ref_fai), file(params.ref_dict))
         interval_dir_ch = GENERATE_TARGET_INTERVALS.out.interval_dir
         strelka_regions_ch = PREPARE_TARGETS.out.call_regions

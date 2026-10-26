@@ -28,11 +28,15 @@ process RENAME_BAM_HEADER {
         }
         { print }' ${params.ref_fai} orig.hdr > new.hdr
 
-    # Fail fast, with a readable message, if the BAM does not match --ref on the primary chromosomes.
-    awk -F'\\t' 'NR==FNR { if (\$1 ~ /^(chr)?([0-9]+|X)\$/) want[\$1]=\$2; next }
-        /^@SQ/ { for (i=2; i<=NF; i++) { if (\$i ~ /^SN:/) n=substr(\$i,4); if (\$i ~ /^LN:/) l=substr(\$i,4) }; have[n]=l }
+    # Fail fast, with a readable message, if the BAM does not match --ref: primary chromosomes must exist with
+    # the same lengths, and contigs shared with --ref must come in the same order (GATK checks the order).
+    awk -F'\\t' 'NR==FNR { idx[\$1]=FNR; if (\$1 ~ /^(chr)?([0-9]+|X)\$/) want[\$1]=\$2; next }
+        /^@SQ/ { for (i=2; i<=NF; i++) { if (\$i ~ /^SN:/) n=substr(\$i,4); if (\$i ~ /^LN:/) l=substr(\$i,4) }; have[n]=l
+                 if (n in idx) { if (idx[n] < last) order_bad=1; last=idx[n] } else extra++ }
         END { for (c in want) if (!(c in have) || have[c]!=want[c]) { bad++; msg=msg " " c "(ref " want[c] ", bam " (c in have ? have[c] : "absent") ")" }
-              if (bad) { print "ERROR: BAM contigs do not match --ref:" msg > "/dev/stderr"; exit 1 } }' ${params.ref_fai} new.hdr
+              if (bad) { print "ERROR: BAM contigs do not match --ref:" msg > "/dev/stderr"; exit 1 }
+              if (order_bad) { print "ERROR: BAM contig order differs from --ref; use a --ref FASTA in the same contig order as the BAM (or picard ReorderSam)" > "/dev/stderr"; exit 1 }
+              if (extra) print "WARNING: " extra " BAM contig(s) are not in --ref; reads on them are ignored or may upset GATK" > "/dev/stderr" }' ${params.ref_fai} new.hdr
 
     IN=${bam}
     if ! cmp -s orig.hdr new.hdr; then
