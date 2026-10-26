@@ -16,6 +16,7 @@
   - [Basic Usage](#basic-usage)
   - [Choosing Where Jobs Run](#choosing-where-jobs-run)
   - [Custom Reference Genome](#custom-reference-genome)
+  - [Clinical BAMs: panels, tumour-only samples, vendor references](#clinical-bams-panels-tumour-only-samples-vendor-references)
   - [Advanced Options](#advanced-options)
 - [Output](#output)
 - [Tool Versions](#tool-versions)
@@ -253,6 +254,54 @@ When a custom reference is provided, the pipeline will automatically generate th
 > **Your custom reference genome must use the `chr` prefix for contig names** (e.g., `chr1`, `chr2`, ..., `chrX`, `chrY`). The pipeline's built-in database files (dbSNP, gnomAD, Panel of Normals, known indels, etc.) use `chr`-prefixed contig names. A reference without the `chr` prefix (e.g., `1`, `2`, ..., `X`, `Y`) will cause tools such as Mutect2, MuSE, Strelka, SAGE, and BQSR to fail due to contig name mismatches.
 >
 > Different GRCh38 builds that include additional or fewer contigs (e.g., alt contigs, decoys, HLA) are supported as long as the standard chromosomes use the `chr` prefix.
+>
+> BAMs aligned to a no-`chr` reference (b37 style: `1`, `2`, `MT`) can still be used: pass a `chr`-named FASTA with the same sequences as `--ref`, and `--contig_rename auto` (the default) renames the BAM's contigs on the fly. See below.
+
+### Clinical BAMs: panels, tumour-only samples, vendor references
+
+Vendor deliveries (e.g. Tempus, CARIS) are usually processed BAMs from targeted panels, often without a matched normal, and often aligned to b37. Start them at `--first_step variant_calling`.
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--type panel` | | Targeted mode like `exome` (Strelka/Manta `--exome`, MuSE `-E`). Requires `--targets`. Refuses `ascat`/`delly`, which need genome-wide data. A Conpair failure is retried, then skipped for that pair instead of stopping the run |
+| `--targets <bed>` | | Capture BED (plain or `.gz`), same contig names as `--ref`. Padded, merged and used for: Mutect2/GetPileupSummaries shards (instead of whole chromosomes), Strelka `--callRegions`, mosdepth and CNVkit targets, BQSR intervals. Also accepted with `--type exome` |
+| `--target_padding` | `100` | bp added on each side of every target |
+| `--contig_rename` | `auto` | Rename BAM contigs between b37 and `chr` style (`1`↔`chr1`, `MT`↔`chrM`) when the other name exists in `--ref` with the same length. `none` turns this off. Either way the run stops early, with a readable message, if the BAM's primary chromosomes do not match `--ref` |
+| `--outdir <dir>` | `<pipeline>/RESULTS` | Where `RESULTS`, `REPORT` and `pipeline.log` go. Use a protected location for patient data, so results are not written inside the code checkout |
+
+**Tumour-only samples.** A patient with a tumour row and no normal row is no longer dropped. With `--first_step variant_calling`:
+
+- Mutect2 runs in tumour-only mode (panel of normals + gnomAD germline resource), and SAGE runs without `-reference`.
+- CNVkit calls copy number against the pooled normals of the run (at least one paired normal is needed).
+- Strelka2, MuSE, Conpair, ASCAT, Delly and Manta need a matched normal, so they are skipped for these patients.
+- `POST/tumor_only/<patient>_<sample>/` holds the Mutect2 ∩ SAGE consensus. Sites with population AF > 0.001 (Mutect2 `POPAF` < 3) are soft-filtered as `germline_popaf`, and `*.PASS.vcf.gz` keeps the rest.
+- `REPORT/tumor_only_patients.txt` lists them.
+
+Tumour-only calls still contain rare germline variants that are absent from gnomAD and the panel of normals, so they are not equivalent to paired calls. Do not pool them for TMB or signatures without checking the false-positive rate on your assay. For example, run some paired tumours again as tumour-only and compare.
+
+Other entry points (`mapping`, `markdup`, `recalibration`) stop with an error if the sheet has tumour-only patients.
+
+**Sample-sheet checks.** The run stops before any job is submitted if:
+
+- a status is not `tumor`/`normal`;
+- a `patient,sample,status` row is duplicated;
+- a patient has more than one normal;
+- a row has the wrong number of fields;
+- an ID contains `tumor`/`normal` as an underscore-separated word.
+
+Example, a Tempus-style panel cohort aligned to b37:
+
+```bash
+nextflow run main.nf -profile tscc_slurm,conda \
+  --type panel --targets panel_targets.chr.bed --tool cnvkit \
+  --genome GRCh37 --first_step variant_calling --sample samples.csv \
+  --database_path /path/to/SomaticBunny_database \
+  --ref human_g1k_v37.chr.fasta --ref_fai human_g1k_v37.chr.fasta.fai --ref_dict human_g1k_v37.chr.dict \
+  --bed callable_regions.bed.gz --bed_tbi callable_regions.bed.gz.tbi \
+  --outdir /protected/path/RESULTS
+```
+
+Run one assay per run: the target BED and the CNVkit reference are per assay.
 
 ### Advanced Options
 
