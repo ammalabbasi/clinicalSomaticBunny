@@ -16,7 +16,15 @@ process CalculateContamination {
     tuple val(map), path("*segments.table"), emit: MUTECT2_segments_table
 
     script:
+    def matched = map.normal ? "-matched ${map.normal}" : ""
+    def prefix = "${map.patient}_${map.tumor_meta.sample}"
+    // Panels and tumour-only samples can have too few common germline SNPs for an estimate. Then write empty
+    // tables; FilterMutectCalls runs without contamination/segmentation instead of the whole run stopping.
     """
-    ${params.gatk} CalculateContamination -I ${map.tumor} -matched ${map.normal} -O ${map.patient}_${map.tumor_meta.sample}_contamination.table --tumor-segmentation ${map.patient}_${map.tumor_meta.sample}_segments.table
+    if ! ${params.gatk} CalculateContamination -I ${map.tumor} ${matched} -O ${prefix}_contamination.table --tumor-segmentation ${prefix}_segments.table; then
+        echo "WARNING: CalculateContamination failed for ${prefix}; filtering without a contamination estimate" >&2
+        : > ${prefix}_contamination.table
+        : > ${prefix}_segments.table
+    fi
     """
 }

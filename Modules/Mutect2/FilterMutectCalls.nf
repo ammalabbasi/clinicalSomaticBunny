@@ -22,14 +22,16 @@ process FilterMutectCalls {
 
     script:
     """
+    CONT_ARGS=""
+    if [ -s ${contamination_table} ]; then CONT_ARGS="--contamination-table ${contamination_table}"; fi
+    if [ -s ${segments_table} ]; then CONT_ARGS="\$CONT_ARGS --tumor-segmentation ${segments_table}"; fi
     ${params.gatk} FilterMutectCalls \
     -R ${params.ref} \
     -V ${unfiltered_vcf} \
-    --contamination-table ${contamination_table} \
+    \$CONT_ARGS \
     --ob-priors ${read_orientation_model_tar} \
     -O ${map.patient}_${map.tumor_meta.sample}_mutect2_filtered.vcf \
     --stats ${merged_stats} \
-    --filtering-stats ${map.patient}_${map.tumor_meta.sample}_mutect2_filtered.stats \
-    --tumor-segmentation ${segments_table}
+    --filtering-stats ${map.patient}_${map.tumor_meta.sample}_mutect2_filtered.stats
     """
 }

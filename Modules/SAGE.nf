@@ -17,11 +17,11 @@ process SAGE {
     tuple val(map),path("*vcf.gz"), emit: SAGE_out
 
     script:
+    def reference_args = map.normal ? "-reference ${map.patient}_${map.normal_meta.sample}_normal -reference_bam ${map.normal}" : ""
     """
     java -Xms4G -Xmx32G -cp ${params.SAGE_jar} com.hartwig.hmftools.sage.SageApplication \
         -threads ${task.cpus} \
-        -reference ${map.patient}_${map.normal_meta.sample}_normal \
-        -reference_bam ${map.normal} \
+        ${reference_args} \
         -tumor ${map.patient}_${map.tumor_meta.sample}_tumor \
         -tumor_bam ${map.tumor} \
         -ref_genome_version ${params.SAGE_ref_genome_version} \
