@@ -4,7 +4,9 @@ process RENAME_BAM_HEADER {
     conda "${params.rename_bam_env}"
 
     input:
-    tuple val(meta), path(bam), path(bai)
+    // Staged under input/ so a BAM already named <patient>_<sample>_<status>.bam cannot collide with the
+    // output (Picard would read and overwrite the same file: "Invalid file pointer").
+    tuple val(meta), path(bam, stageAs: 'input/*'), path(bai, stageAs: 'input/*')
 
     output:
     tuple val(meta), path("${meta.patient}_${meta.sample}_${meta.status}.bam"), path("${meta.patient}_${meta.sample}_${meta.status}.bam.bai"), emit: renamed_bam
