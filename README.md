@@ -304,6 +304,26 @@ nextflow run main.nf -profile tscc_slurm,conda \
 
 Run one assay per run: the target BED and the CNVkit reference are per assay.
 
+<!-- >>> msi -->
+#### Microsatellite instability (`--tool msi`)
+
+[MSIsensor-pro](https://github.com/xjtu-omics/msisensor-pro) 1.3.0 (bioconda, `yml/msisensor_pro.yml`) scores MSI as the percentage of evaluated microsatellites that are unstable.
+
+- **Sites** (`MSI_SCAN`, once per run): `msisensor-pro scan` over the padded `--targets` (panel/exome) or the whole `--ref` (genome). Published to `MSI/sites/msi_sites.tsv`. `--msi_sites <file>` reuses a list and skips the scan.
+- **Paired** patients: `msisensor-pro msi` compares the tumour with its own normal.
+- **Tumour-only** patients: `msisensor-pro pro` compares the tumour with a baseline of normals from the same assay. The baseline is built from every normal in the sheet, paired normals plus normal-only pool rows, and published to `MSI/baseline/msi_baseline.tsv` (normals listed in `msi_baseline.normals.txt`). Pass it to a later run of the same assay with `--msi_baseline <file>`. If the sheet has tumour-only patients but no normals and no `--msi_baseline` is given, the run stops before any job is submitted. With fewer than 20 normals, the run warns: the authors recommend at least 20 normals from the same sequencer.
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--msi_threshold_paired` | `10` | MSI-H when score (% unstable sites) ≥ this, paired. MSK-IMPACT's cut-off for MSIsensor on a panel (Middha et al. 2017, JCO Precis Oncol). WES studies often use 3.5 |
+| `--msi_threshold_tumor_only` | `20` | MSI-H cut-off for tumour-only scores. MSIsensor-pro publishes **no** cut-off and says to calibrate one per panel against known MSI status, so treat 20 as a placeholder |
+| `--msi_min_sites` | `50` | Fewer sites evaluated → `qc = LOW_SITES` (the MSIsensor-pro paper shows it works with ≥ 50 sites) |
+| `--msi_min_coverage` | `20` | Read depth a site needs to be evaluated (`-c`; MSIsensor-pro suggests 20 for WES, 15 for WGS) |
+| `--msi_baseline_min_normals` | `10` | Baseline sites need coverage in this many normals (`baseline -s`). Capped at the number of normals |
+
+Outputs: `MSI/paired/<patient>_<sample>/` and `MSI/tumor_only/<patient>_<sample>/` hold the raw MSIsensor-pro files and `<patient>_<sample>.msi_status.tsv`. `MSI/msi_summary.tsv` has one row per tumour: `patient, sample, mode, sites_evaluated, unstable_sites, msi_score_pct, threshold_pct, status (MSI-H|MSS), qc (PASS|LOW_SITES)`. Paired and tumour-only scores are on different scales, so do not compare them with one cut-off. Check both thresholds on your assay with samples of known MSI status (IHC/PCR) before using the status.
+<!-- <<< msi -->
+
 ### Advanced Options
 
 #### Publishing Intermediate Files
