@@ -17,6 +17,12 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
+// >>> mutect2_pon
+params.mutect2_cohort_pon = null          // build: Mutect2 PON from this run's normal BAMs, used for its own tumours
+params.mutect2_cohort_pon_name = "cohort" // published as Mutect2_PON/<name>.pon.vcf.gz(.tbi)
+params.mutect2_cohort_pon_warn_below = 10 // warn when the PON is built from fewer normals (error below 2)
+// --mutect2_pon <vcf.gz> (declared further down, default = database PON) replaces the database PON everywhere.
+// <<< mutect2_pon
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
@@ -295,6 +301,39 @@ params.genome_database_dir = "${params.database_dir}/${params.genomes[params.gen
 params.mutect2_pon = "${params.genome_database_dir}/${params.genomes[params.genome].mutect2_pon}"
 params.mutect2_interval_dir = "${params.genome_database_dir}/${params.genomes[params.genome].mutect2_interval_dir}"
 params.mutect2_germline = "${params.genome_database_dir}/${params.genomes[params.genome].mutect2_germline}"
+// >>> mutect2_pon
+// Which PON MUTECT2_CALLING gets (paired and tumour-only): the database one, --mutect2_pon <vcf> (a command-line
+// value wins over the assignment above), or the cohort PON built in this run. It is passed to the process as a
+// staged [vcf, index] input, so the cohort PON is an ordinary channel dependency.
+params.mutect2_cohort_pon_dir = "${params.results_dir}/Mutect2_PON"
+def mutect2PonDefault = "${params.genome_database_dir}/${params.genomes[params.genome].mutect2_pon}".toString()
+def mutect2PonUser = params.mutect2_pon && params.mutect2_pon.toString() != mutect2PonDefault
+if (params.mutect2_cohort_pon && params.mutect2_cohort_pon != 'build') {
+    error "--mutect2_cohort_pon accepts only 'build' (got '${params.mutect2_cohort_pon}'). " +
+          "To use a PON built earlier, pass it with --mutect2_pon <pon.vcf.gz>."
+}
+if (params.mutect2_cohort_pon && mutect2PonUser) {
+    error "Use either --mutect2_cohort_pon build or --mutect2_pon <vcf>, not both."
+}
+def mutect2PonFiles = []
+if (!params.mutect2_cohort_pon) {
+    def ponPath = params.mutect2_pon ? params.mutect2_pon.toString() : ''
+    if (ponPath && !ponPath.endsWith('/')) {      // the RN7 entry has no PON: '' -> no -pon
+        def ponIdx = ponPath.endsWith('.gz') ? "${ponPath}.tbi" : "${ponPath}.idx"
+        if (mutect2PonUser) {
+            if (!file(ponPath).exists()) error "--mutect2_pon not found: ${ponPath}"
+            if (!file(ponIdx).exists()) error "--mutect2_pon needs its index next to it: ${ponIdx}"
+        }
+        mutect2PonFiles = file(ponIdx).exists() ? [ponPath, ponIdx] : [ponPath]
+    }
+}
+params.mutect2_pon_resolved = mutect2PonFiles
+def mutect2PonMsg = params.mutect2_cohort_pon ?
+    "Mutect2 PON      : cohort PON built in this run -> ${params.mutect2_cohort_pon_dir}/${params.mutect2_cohort_pon_name}.pon.vcf.gz" :
+    "Mutect2 PON      : ${mutect2PonFiles ? mutect2PonFiles[0] : 'none'} (${mutect2PonUser ? '--mutect2_pon' : 'database'})"
+log.info mutect2PonMsg
+new File(params.log_file).append(mutect2PonMsg + "\n")
+// <<< mutect2_pon
 
 params.indel_vaf_script =
     params.indel_vaf_script ?: "${projectDir}/INDEL_VAF.py"
@@ -459,6 +498,9 @@ include { MergeMutectStats } from './Modules/Mutect2/MergeMutectStats'
 include { MergeVcfs } from './Modules/Mutect2/MergeVcfs'
 include { CalculateContamination } from './Modules/Mutect2/CalculateContamination'
 include { FilterMutectCalls } from './Modules/Mutect2/FilterMutectCalls'
+// >>> mutect2_pon
+include { MUTECT2_COHORT_PON } from './Modules/MUTECT2_PON/MUTECT2_COHORT_PON'
+// <<< mutect2_pon
 
 include { RENAME_BAM_HEADER } from './Modules/RENAME_BAM_HEADER'
 include { PREPARE_TARGETS } from './Modules/TARGETS/PREPARE_TARGETS'
@@ -540,6 +582,18 @@ if (sheetFile.exists()) {
         error "Sample sheet ${params.sample}:\n  " + problems.join('\n  ')
     }
     tumorOnlyPatients = (tumors.keySet() - normals.keySet()) as Set
+    // >>> mutect2_pon
+    if (params.mutect2_cohort_pon == 'build') {
+        if (normals.size() < 2) {
+            error "--mutect2_cohort_pon build needs at least 2 normal rows in the sample sheet (found ${normals.size()})."
+        }
+        if (normals.size() < (params.mutect2_cohort_pon_warn_below as int)) {
+            log.warn "Mutect2 cohort PON from only ${normals.size()} normals: a site enters the PON when >= 2 normals " +
+                     "carry it, so few normals catch only the most recurrent artefacts. ~${params.mutect2_cohort_pon_warn_below}+ recommended."
+        }
+        log.info "Mutect2 cohort PON: building from ${normals.size()} normal BAM(s) (paired and normal-only rows)"
+    }
+    // <<< mutect2_pon
     def selectedTools = params.tool ? params.tool.toString().split(',').collect { it.trim() } : []
     // CNVkit reference: pooled from the run's normals, or flat (no normals). auto picks pooled when the sheet has
     // normals. A pooled reference with no normals would never be built (collect() on an empty channel emits
@@ -968,7 +1022,15 @@ workflow {
                 MOSDEPTH(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
             }
 
-            MUTECT2_CALLING(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP), chunk, interval_dir_ch).set { MUTECT2_CALLING_out }
+            // >>> mutect2_pon (was: MUTECT2_CALLING(..., chunk, interval_dir_ch))
+            if (params.mutect2_cohort_pon == 'build') {
+                mutect2_pon_ch = MUTECT2_COHORT_PON(normal, chunk, interval_dir_ch,
+                    params.targets ? PREPARE_TARGETS.out.padded_bed : interval_dir_ch)
+            } else {
+                mutect2_pon_ch = Channel.value(params.mutect2_pon_resolved.collect { file(it) })
+            }
+            MUTECT2_CALLING(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP), chunk, interval_dir_ch, mutect2_pon_ch).set { MUTECT2_CALLING_out }
+            // <<< mutect2_pon
             MUTECT2_CALLING_out.LearnReadOrientationModel_input.groupTuple(by:0).set { LearnReadOrientationModel_input_pair }
             MUTECT2_CALLING_out.MergeMutectStats_input.groupTuple(by:0).set { MergeMutectStats_input_pair }
             MUTECT2_CALLING_out.MergeVcfs_input.groupTuple(by:0).set { MergeVcfs_input_pair }
@@ -1155,7 +1217,15 @@ workflow {
             }
 
             GETpileUP(RECALIBRATE_out.pair_recal, chunk, interval_dir_ch).set { GETpileUP_out }
-            MUTECT2_CALLING(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP), chunk, interval_dir_ch).set { MUTECT2_CALLING_out }
+            // >>> mutect2_pon (was: MUTECT2_CALLING(..., chunk, interval_dir_ch))
+            if (params.mutect2_cohort_pon == 'build') {
+                mutect2_pon_ch = MUTECT2_COHORT_PON(normal, chunk, interval_dir_ch,
+                    params.targets ? PREPARE_TARGETS.out.padded_bed : interval_dir_ch)
+            } else {
+                mutect2_pon_ch = Channel.value(params.mutect2_pon_resolved.collect { file(it) })
+            }
+            MUTECT2_CALLING(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP), chunk, interval_dir_ch, mutect2_pon_ch).set { MUTECT2_CALLING_out }
+            // <<< mutect2_pon
             MUTECT2_CALLING_out.LearnReadOrientationModel_input.groupTuple(by:0).set { LearnReadOrientationModel_input_pair }
             MUTECT2_CALLING_out.MergeMutectStats_input.groupTuple(by:0).set { MergeMutectStats_input_pair }
             MUTECT2_CALLING_out.MergeVcfs_input.groupTuple(by:0).set { MergeVcfs_input_pair }
