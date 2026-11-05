@@ -1,0 +1,13 @@
+name: vep
+# Ensembl VEP + vcf2maf for --tool vep. The VEP release must match the offline cache (--vep_cache_version, 112).
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - ensembl-vep=112.0
+  - vcf2maf=1.6.22
+  - htslib=1.21
+  - samtools=1.21
+  - bcftools=1.21
+  # missing from the bioconda ensembl-vep 112.0 recipe; VEP dies with "Can't locate List/MoreUtils.pm" without it
+  - perl-list-moreutils=0.430

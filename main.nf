@@ -19,6 +19,33 @@ params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM hea
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
+// >>> vep
+// --tool vep: Ensembl VEP (offline cache) + vcf2maf on the paired and tumour-only consensus VCFs (see README)
+params.vep_cache = null            // VEP cache root (--dir), containing homo_sapiens/<version>_<assembly>/
+params.vep_cache_version = 112     // must match the ensembl-vep release in yml/vep.yml
+params.vep_assembly = null         // default: --genome (GRCh38 | GRCh37)
+params.vep_fasta = null            // default: --ref (same contig names as the VCFs)
+params.vep_scenario = "scenario_5" // paired consensus to annotate: scenario_3 | scenario_4 | scenario_5 | scenario_6
+params.vep_env = "$projectDir/yml/vep.yml"
+params.vep_dir = "${params.results_dir}/VEP"
+params.vep_maf_dir = "${params.results_dir}/MAF"
+if (params.tool && params.tool.toString().split(',').collect { it.trim() }.contains('vep')) {
+    def vepAssembly = params.vep_assembly ?: params.genome
+    if (!(vepAssembly in ['GRCh38', 'GRCh37'])) {
+        error "--tool vep annotates human calls only: --vep_assembly/--genome must be GRCh38 or GRCh37 (got '${vepAssembly}')."
+    }
+    if (!(params.vep_scenario in ['scenario_3', 'scenario_4', 'scenario_5', 'scenario_6'])) {
+        error "--vep_scenario must be scenario_3, scenario_4, scenario_5 or scenario_6 (the MERGE_HEADER standard VCFs)."
+    }
+    if (!params.vep_cache) {
+        error "--tool vep needs --vep_cache <dir> holding homo_sapiens/${params.vep_cache_version}_${vepAssembly}/ (an indexed Ensembl VEP cache)."
+    }
+    def vepCacheDir = file("${params.vep_cache}/homo_sapiens/${params.vep_cache_version}_${vepAssembly}")
+    if (!vepCacheDir.isDirectory()) {
+        error "VEP cache not found: ${vepCacheDir} (check --vep_cache, --vep_cache_version, --vep_assembly)."
+    }
+}
+// <<< vep
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
 
 // Initialize the log file with a header
@@ -475,6 +502,11 @@ include { POST_scenario4 } from './Modules/POST_scenario4.nf'
 include { POST_scenario5 } from './Modules/POST_scenario5.nf'
 include { POST_scenario6 } from './Modules/POST_scenario6.nf'
 include { MERGE_HEADER } from './Modules/MERGE_HEADER.nf'
+// >>> vep
+include { VEP_ANNOTATE } from './Modules/VEP/VEP_ANNOTATE.nf'
+include { VCF2MAF } from './Modules/VEP/VCF2MAF.nf'
+include { VEP_COHORT_MAF } from './Modules/VEP/VEP_COHORT_MAF.nf'
+// <<< vep
 include { ALLELECOUNTER } from './Modules/ALLELECOUNTER.nf'
 
 include { SAVE_CSV_FASTQC } from './Modules/SAVE_CSV/SAVE_CSV_FASTQC'
@@ -1383,6 +1415,30 @@ workflow {
         merge_all = merge_3.mix(merge_4, merge_5, merge_6)
 
 		MERGE_HEADER(merge_all)
+
+        // >>> vep
+        // VEP + vcf2maf: the paired standard consensus VCF of --vep_scenario and the tumour-only PASS consensus,
+        // one MAF per sample, then MAF/cohort.maf with an Analysis_Mode column.
+        if (isToolSelected('vep')) {
+            // Sample IDs as the callers name their VCF columns (Mutect2/SAGE): <patient>_<sample>_tumor|_normal
+            vep_pair_ids = normal_post.cross(tumor_post){it[0]}.map { normal, tumor ->
+                ["${tumor[1].patient}_${tumor[1].sample}".toString(),
+                 "${tumor[1].patient}_${tumor[1].sample}_tumor".toString(),
+                 "${normal[1].patient}_${normal[1].sample}_normal".toString()]
+            }
+            def vep_suffix = "_${params.vep_scenario}_standard_PASSed.vcf".toString()
+            vep_paired = MERGE_HEADER.out.final_standard_vcf
+                .filter { vcf -> vcf.name.endsWith(vep_suffix) }
+                .map { vcf -> [vcf.name.substring(0, vcf.name.length() - vep_suffix.length()), vcf] }
+                .join(vep_pair_ids)
+                .map { patient_sample, vcf, tumor_id, normal_id -> [patient_sample, 'paired', tumor_id, normal_id, vcf] }
+            vep_tumor_only = POST_TUMOR_ONLY.out.consensus_pass
+                .map { patient_sample, vcf, tbi -> [patient_sample, 'tumor_only', "${patient_sample}_tumor".toString(), 'NORMAL', vcf] }
+            VEP_ANNOTATE(vep_paired.mix(vep_tumor_only))
+            VCF2MAF(VEP_ANNOTATE.out.vcf)
+            VEP_COHORT_MAF(VCF2MAF.out.maf.map { patient_sample, mode, maf -> maf }.collect())
+        }
+        // <<< vep
 
 		
 
