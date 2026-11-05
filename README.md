@@ -408,6 +408,34 @@ Synthetic check (simulated reads from a public GRCh38 window; panel of 40 × 250
 - **Paired, POST consensus:** hotspot false positives fell from 6 to 0. Low-VAF SNVs found went from 0/5 to 4/5.
 - **Tumour-only, Mutect2:** low-VAF SNVs found went from 0/5 to 5/5.
 <!-- <<< umi -->
+<!-- >>> vep -->
+#### Variant annotation and MAF (`--tool vep`)
+
+Ensembl VEP (offline cache) and vcf2maf run on the consensus calls after POST, from any entry point (`mapping`, `markdup`, `recalibration`, `variant_calling`), GRCh38 or GRCh37. Environment: `yml/vep.yml` (ensembl-vep 112.0, vcf2maf 1.6.22).
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--vep_cache <dir>` | required | VEP cache root holding `homo_sapiens/<version>_<assembly>/` (indexed cache). On TSCC: `/tscc/projects/ps-lalexandrov/shared/vep_ref` (has `112_GRCh38`) |
+| `--vep_cache_version` | `112` | Must match the ensembl-vep release in `yml/vep.yml` |
+| `--vep_assembly` | `--genome` | `GRCh38` or `GRCh37` |
+| `--vep_fasta` | `--ref` | FASTA for HGVS and vcf2maf; same contig names as the VCFs |
+| `--vep_scenario` | `scenario_5` | Which paired consensus to annotate: `POST/standard_vcf/<patient>_<sample>_<scenario>_standard_PASSed.vcf` |
+
+What is annotated:
+
+- Paired: the standard consensus VCF of `--vep_scenario`. The default `scenario_5` keeps calls that PASS in each contributing caller and the DKFZ bias filter, without scenario 6's extra TLOD/SEVS cut-offs, which mostly remove low-VAF calls. Scenarios 3 and 4 do not require a per-caller PASS. These standard VCFs have no sample columns, so the MAF depth and count columns (`t_depth`, `t_alt_count`, `n_*`) are empty for paired rows.
+- Tumour-only: `POST/tumor_only/<patient>_<sample>/*_tumor_only_consensus.PASS.vcf.gz`. Depths come from Mutect2's tumour column. `Matched_Norm_Sample_Barcode` is `NORMAL`, vcf2maf's default for tumour-only VCFs.
+
+VEP runs with the flags vcf2maf uses, plus `--mane`. The picked transcript (`PICK`) prefers MANE Select, then the Ensembl canonical transcript. vcf2maf reports the canonical transcript of the most severely affected gene, which in Ensembl 112 is the MANE Select transcript for most protein-coding genes. MANE IDs are kept as `MANE_SELECT`/`MANE_PLUS_CLINICAL` columns. Multi-allelic records are split, so each ALT allele gets one MAF row. Each task fails if the VEP VCF or the MAF has a different number of records than its input. Sample barcodes follow the caller VCF columns: `<patient>_<sample>_tumor` and `<patient>_<normal sample>_normal`.
+
+Outputs:
+
+- `VEP/<patient>_<sample>/<patient>_<sample>.<paired|tumor_only>.vep.vcf.gz` (+ `.tbi`)
+- `MAF/<patient>_<sample>/<patient>_<sample>.<paired|tumor_only>.maf`
+- `MAF/cohort.maf`: all samples, with a final `Analysis_Mode` column (`paired` or `tumor_only`)
+
+A cache for another release or assembly: download the indexed cache `homo_sapiens_vep_<release>_<assembly>.tar.gz` from `https://ftp.ensembl.org/pub/release-<release>/variation/indexed_vep_cache/`, extract it under `--vep_cache`, and pin the same ensembl-vep release in `yml/vep.yml`.
+<!-- <<< vep -->
 
 ### Advanced Options
 
