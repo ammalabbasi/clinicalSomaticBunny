@@ -2091,6 +2091,7 @@ workflow {
             .set { recal_map_keyed }
 
         POST_scenario4.out.final_vcf
+            .filter { ps, vcf -> vcf.readLines().any { !it.startsWith('#') } }  // clinical: skip AlleleCounter for an empty consensus (it segfaults); see REPORT/consensus_status.tsv
             .join(recal_map_keyed)
             .map { patient_sample, vcf_file, recal_map -> 
                 [
@@ -2106,6 +2107,7 @@ workflow {
 
 
         POST_scenario5.out.final_vcf
+            .filter { ps, vcf -> vcf.readLines().any { !it.startsWith('#') } }  // clinical: skip AlleleCounter for an empty consensus (it segfaults); see REPORT/consensus_status.tsv
             .join(recal_map_keyed)
             .map { patient_sample, vcf_file, recal_map -> 
                 [
@@ -2120,6 +2122,7 @@ workflow {
             .set { allelecounter_input_5 }
 
         POST_scenario6.out.final_vcf
+            .filter { ps, vcf -> vcf.readLines().any { !it.startsWith('#') } }  // clinical: skip AlleleCounter for an empty consensus (it segfaults); see REPORT/consensus_status.tsv
             .join(recal_map_keyed)
             .map { patient_sample, vcf_file, recal_map -> 
                 [
