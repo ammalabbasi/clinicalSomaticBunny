@@ -257,7 +257,12 @@ if (params.targets) {
     }
     def out = new File("${params.results_dir}/custom_intervals/targets.clean.bed")
     out.parentFile.mkdirs()
-    out.text = rows.collect { "${it[0]}\t${it[1]}\t${it[2]}" }.join('\n') + '\n'
+    // Rewrite only when the content changes: a new timestamp on every launch invalidated -resume for every step
+    // downstream of the targets.
+    def cleanText = rows.collect { "${it[0]}\t${it[1]}\t${it[2]}" }.join('\n') + '\n'
+    if (!out.exists() || out.text != cleanText) {
+        out.text = cleanText
+    }
     targetsClean = out.absolutePath
 }
 params.targets_clean = targetsClean
