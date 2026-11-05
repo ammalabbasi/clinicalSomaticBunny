@@ -17,6 +17,15 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
+// >>> msi
+params.msi_threshold_paired = 10      // MSI-H when % unstable sites >= this, paired (msisensor-pro msi; MSK-IMPACT MSIsensor cut-off)
+params.msi_threshold_tumor_only = 20  // MSI-H cut-off for tumour-only (msisensor-pro pro vs baseline); calibrate per assay
+params.msi_min_sites = 50             // fewer sites evaluated -> qc LOW_SITES (MSIsensor-pro paper: >= 50 sites)
+params.msi_min_coverage = 20          // per-site read depth for a site to count (msisensor-pro -c; 20 for WES/panels)
+params.msi_sites = null               // prebuilt msisensor-pro scan list (skips MSI_SCAN)
+params.msi_baseline = null            // prebuilt tumour-only baseline (MSI/baseline/msi_baseline.tsv of an earlier run, same assay)
+params.msi_baseline_min_normals = 10  // baseline: sites must be covered in this many normals (capped at the number of normals)
+// <<< msi
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 // >>> tmb
 // Tumour mutational burden (--tool tmb): PASS consensus SNVs+indels with tumour VAF >= tmb_min_vaf inside the
@@ -403,6 +412,10 @@ params.manta_dir="${params.results_dir}/MANTA"
 params.post_dir="${params.results_dir}/POST"
 params.intervals_dir="${params.results_dir}/custom_intervals"
 params.VAF_dir="${params.results_dir}/POST/VAF"
+// >>> msi
+params.msi_dir = "${params.results_dir}/MSI"
+params.msi_env = "$projectDir/yml/msisensor_pro.yml"
+// <<< msi
 
 params.bwamem2_env = "$projectDir/yml/bwamem2.yml"
 params.mkdup_env = "$projectDir/yml/picard.yml"
@@ -530,6 +543,14 @@ include { SAVE_CSV_MuSE } from './Modules/SAVE_CSV/SAVE_CSV_MuSE'
 include { SAVE_CSV_Mutect2 } from './Modules/SAVE_CSV/SAVE_CSV_Mutect2'
 include { SAVE_CSV_CONPAIR } from './Modules/SAVE_CSV/SAVE_CSV_CONPAIR'
 include { SAVE_CSV_MOSDEPTH } from './Modules/SAVE_CSV/SAVE_CSV_MOSDEPTH'
+// >>> msi
+include { MSI_SCAN } from './Modules/MSI/MSI_SCAN'
+include { MSI_PAIRED } from './Modules/MSI/MSI_PAIRED'
+include { MSI_PRO_NORMAL } from './Modules/MSI/MSI_PRO_NORMAL'
+include { MSI_BASELINE } from './Modules/MSI/MSI_BASELINE'
+include { MSI_TUMOR_ONLY } from './Modules/MSI/MSI_TUMOR_ONLY'
+include { MSI_SUMMARY } from './Modules/MSI/MSI_SUMMARY'
+// <<< msi
 
 // Sample-sheet checks and tumour-only routing (feature/clinical-bam).
 // Reads only the sheet (IDs and paths), never a BAM. Tumours without a normal used to vanish silently at
@@ -620,6 +641,35 @@ if (sheetFile.exists()) {
 }
 params.tumor_only_patients = tumorOnlyPatients
 params.cnvkit_ref_mode = cnvkitRefMode
+// >>> msi
+// MSI: tumour-only patients are scored against a baseline built from normals of the same assay (the run's
+// normals, including normal-only pool rows) or a prebuilt --msi_baseline. Neither -> stop before any job runs.
+def msiNormals = 0
+if (params.tool && params.tool.toString().split(',').collect { it.trim() }.contains('msi')) {
+    if (params.msi_baseline && !file(params.msi_baseline).exists()) {
+        error "--msi_baseline file not found: ${params.msi_baseline}"
+    }
+    if (params.msi_sites && !file(params.msi_sites).exists()) {
+        error "--msi_sites file not found: ${params.msi_sites}"
+    }
+    if (sheetFile.exists()) {
+        def rows = sheetFile.readLines().findAll { it.trim() }
+        def iStatus = rows[0].split(',').collect { it.trim() }.indexOf('status')
+        msiNormals = rows.drop(1).count { (it.split(',', -1) as List)[iStatus] == 'normal' }
+    }
+    if (tumorOnlyPatients && !params.msi_baseline) {
+        if (msiNormals == 0) {
+            error "--tool msi: ${tumorOnlyPatients.size()} tumour-only patient(s) need an MSI baseline, but the sheet has no " +
+                  "normals. Add normal rows from the same assay (normal-only rows are allowed) or pass --msi_baseline <file>."
+        }
+        if (msiNormals < 20) {
+            log.warn "MSI tumour-only baseline is built from ${msiNormals} normal(s); MSIsensor-pro recommends >= 20 normals " +
+                     "from the same assay and sequencer. Tumour-only MSI scores are less reliable with fewer."
+        }
+    }
+}
+params.msi_n_normals = msiNormals
+// <<< msi
 
 // Define a workflow completion handler
 workflow.onComplete {
@@ -1158,6 +1208,23 @@ workflow {
                 MANTA(RECALIBRATE_out_MAP_CN)
             }
 
+            // >>> msi
+            // MSIsensor-pro: pairs with msi (tumour vs its normal), tumour-only with pro against a baseline of normals
+            if (params.tool && isToolSelected('msi')) {
+                msi_sites_ch = params.msi_sites ? Channel.value(file(params.msi_sites)) :
+                    MSI_SCAN(params.targets ? PREPARE_TARGETS.out.padded_bed : Channel.value('genome')).sites
+                MSI_PAIRED(RECALIBRATE_out_MAP, msi_sites_ch)
+                if (params.msi_baseline) {
+                    msi_baseline_ch = Channel.value(file(params.msi_baseline))
+                } else {
+                    MSI_PRO_NORMAL(normal.map { patient, meta, bam, bai -> ["${patient}_${meta.sample}", bam] }, msi_sites_ch)
+                    msi_baseline_ch = MSI_BASELINE(MSI_PRO_NORMAL.out.all.collect(), msi_sites_ch).baseline
+                }
+                MSI_TUMOR_ONLY(TUMOR_ONLY_MAP, msi_baseline_ch)
+                MSI_SUMMARY(MSI_PAIRED.out.status.map { it[1] }.mix(MSI_TUMOR_ONLY.out.status.map { it[1] }).collect())
+            }
+            // <<< msi
+
         } else {
 
             RECALIBRATE_out.pair_recal.filter{it[1].status == 'normal'}.set{normal}
@@ -1345,6 +1412,23 @@ workflow {
 	    if (params.tool && params.tool.contains('manta')) {
 	        MANTA(RECALIBRATE_out_MAP_CN)
 	    }
+
+            // >>> msi
+            // MSIsensor-pro, as in the variant_calling entry
+            if (params.tool && isToolSelected('msi')) {
+                msi_sites_ch = params.msi_sites ? Channel.value(file(params.msi_sites)) :
+                    MSI_SCAN(params.targets ? PREPARE_TARGETS.out.padded_bed : Channel.value('genome')).sites
+                MSI_PAIRED(RECALIBRATE_out_MAP, msi_sites_ch)
+                if (params.msi_baseline) {
+                    msi_baseline_ch = Channel.value(file(params.msi_baseline))
+                } else {
+                    MSI_PRO_NORMAL(normal.map { patient, meta, bam, bai -> ["${patient}_${meta.sample}", bam] }, msi_sites_ch)
+                    msi_baseline_ch = MSI_BASELINE(MSI_PRO_NORMAL.out.all.collect(), msi_sites_ch).baseline
+                }
+                MSI_TUMOR_ONLY(TUMOR_ONLY_MAP, msi_baseline_ch)
+                MSI_SUMMARY(MSI_PAIRED.out.status.map { it[1] }.mix(MSI_TUMOR_ONLY.out.status.map { it[1] }).collect())
+            }
+            // <<< msi
         }
     }
 
