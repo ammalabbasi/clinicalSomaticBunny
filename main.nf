@@ -17,6 +17,19 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
+// >>> qc
+params.somalier_sites = "release"          // --tool somalier sites: release (public somalier sites) | targets (common gnomAD SNPs in the padded targets) | <sites.vcf.gz>
+params.somalier_release_sites = null       // override the release sites path (default <database>/Databases/<genome>/somalier/sites.<build>.vcf.gz)
+params.somalier_min_af = 0.2               // targets mode: gnomAD AF window
+params.somalier_max_af = 0.8
+params.somalier_swap_max_relatedness = 0.6 // same patient below this -> swap (loose: tumour CN/LOH lowers T-N relatedness)
+params.somalier_dup_min_relatedness = 0.7  // different patients at or above this -> duplicate/mislabel
+params.somalier_min_sites = 50             // fewer shared sites -> not judged (same-patient pairs flagged insufficient_sites)
+params.somalier_min_x_sites = 10           // informative chrX sites needed to infer sex
+params.somalier_relate_args = ""
+params.multiqc = true                      // one MultiQC report at the end: --multiqc false to skip
+params.multiqc_config = null
+// <<< qc
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
@@ -296,6 +309,37 @@ params.mutect2_pon = "${params.genome_database_dir}/${params.genomes[params.geno
 params.mutect2_interval_dir = "${params.genome_database_dir}/${params.genomes[params.genome].mutect2_interval_dir}"
 params.mutect2_germline = "${params.genome_database_dir}/${params.genomes[params.genome].mutect2_germline}"
 
+// >>> qc
+params.somalier_dir = "${params.results_dir}/somalier"
+params.multiqc_dir = "${params.results_dir}/MultiQC"
+params.somalier_env = "${projectDir}/yml/somalier.yml"
+params.multiqc_env = "${projectDir}/yml/multiqc.yml"
+def somalierSelected = params.tool && params.tool.toString().split(',').collect { it.trim() }.contains('somalier')
+def somalierSitesFile = null
+if (somalierSelected) {
+    if (!(params.genome in ['GRCh38', 'GRCh37'])) {
+        error "--tool somalier needs --genome GRCh38 or GRCh37 (human common-SNP sites)."
+    }
+    if (params.somalier_sites == 'targets') {
+        if (!params.targets) error "--somalier_sites targets needs --targets."
+        if (!file(params.mutect2_germline).exists() || !file("${params.mutect2_germline}.tbi").exists()) {
+            error "--somalier_sites targets reads common SNPs from ${params.mutect2_germline} (+ .tbi), which is missing."
+        }
+    } else {
+        def build = (params.genome == 'GRCh38') ? 'hg38' : 'GRCh37'
+        somalierSitesFile = (params.somalier_sites == 'release') ?
+            (params.somalier_release_sites ?: "${params.genome_database_dir}/somalier/sites.${build}.vcf.gz") : params.somalier_sites
+        if (!file(somalierSitesFile).exists()) {
+            error "somalier sites not found: ${somalierSitesFile}\n" +
+                  "  Download the public sites (GRCh38: https://github.com/brentp/somalier/files/3412456/sites.hg38.vcf.gz, " +
+                  "GRCh37: https://github.com/brentp/somalier/files/3412455/sites.GRCh37.vcf.gz) and pass " +
+                  "--somalier_release_sites <file>, or use --somalier_sites targets with --targets."
+        }
+    }
+}
+params.somalier_sites_file = somalierSitesFile
+// <<< qc
+
 params.indel_vaf_script =
     params.indel_vaf_script ?: "${projectDir}/INDEL_VAF.py"
 
@@ -465,6 +509,13 @@ include { PREPARE_TARGETS } from './Modules/TARGETS/PREPARE_TARGETS'
 include { GENERATE_TARGET_INTERVALS } from './Modules/TARGETS/GENERATE_TARGET_INTERVALS'
 include { POST_TUMOR_ONLY } from './Modules/POST_TUMOR_ONLY'
 include { GENERATE_INTERVALS } from './Modules/GENERATE_INTERVALS'
+// >>> qc
+include { SOMALIER_SITES } from './Modules/SOMALIER/SOMALIER_SITES'
+include { SOMALIER_EXTRACT } from './Modules/SOMALIER/SOMALIER_EXTRACT'
+include { SOMALIER_RELATE } from './Modules/SOMALIER/SOMALIER_RELATE'
+include { BCFTOOLS_STATS } from './Modules/MULTIQC/BCFTOOLS_STATS'
+include { MULTIQC } from './Modules/MULTIQC/MULTIQC'
+// <<< qc
 
 include { POST } from './Modules/POST.nf'
 include { POST_rename } from './Modules/POST_rename.nf'
@@ -1458,4 +1509,49 @@ workflow {
 
         ALLELECOUNTER(ch_all_outputs)
     }
+
+    // >>> qc
+    // Sample identity (somalier) over every BAM of the run (tumours, normals, normal-only pool rows), from either
+    // entry path, then one MultiQC report over all QC files.
+    def humanGenome = params.genome in ['GRCh38', 'GRCh37']
+    def qcBams = (params.first_step == 'variant_calling') ? sample_sheet : RECALIBRATE_out.pair_recal
+    def mqc_files = Channel.empty()
+    if (isToolSelected('somalier')) {
+        def somalier_sites_ch = (params.somalier_sites == 'targets') ?
+            SOMALIER_SITES(PREPARE_TARGETS.out.padded_bed,
+                           [file(params.mutect2_germline), file("${params.mutect2_germline}.tbi")]).sites.first() :
+            Channel.value(file(params.somalier_sites_file))
+        SOMALIER_EXTRACT(qcBams, somalier_sites_ch)
+        SOMALIER_RELATE(SOMALIER_EXTRACT.out.somalier.collect(), file(params.sample))
+        SOMALIER_RELATE.out.flags.subscribe { f ->
+            def n = f.readLines().findAll { it.trim() }.size() - 1
+            def msg = n > 0 ?
+                "Sample identity: ${n} flag(s) (swap / duplicate / sex / insufficient sites). See ${params.report_dir}/identity_flags.tsv" :
+                "Sample identity: no flags (somalier, ${params.somalier_dir})"
+            if (n > 0) log.warn msg else log.info msg
+            writeToLog(params.log_file, msg)
+        }
+        mqc_files = mqc_files.mix(SOMALIER_RELATE.out.pairs, SOMALIER_RELATE.out.samples)
+    }
+    if (params.multiqc) {
+        if (params.first_step == 'mapping') {
+            mqc_files = mqc_files.mix(FASTQC.out.zip.flatten())
+        }
+        if (params.first_step in ['mapping', 'markdup']) {
+            mqc_files = mqc_files.mix(MKDUP.out.metrics)
+        }
+        if (params.first_step in ['mapping', 'markdup', 'recalibration'] && humanGenome) {
+            def bqsr_tables = params.targeted ?
+                RECALIBRATE_BaseRecal_exome.out.BQSR_input.map { it[3] } :
+                RECALIBRATE_MergeReport.out.BQSR_input.map { it[3] }
+            mqc_files = mqc_files.mix(bqsr_tables)
+        }
+        if (humanGenome) {
+            mqc_files = mqc_files.mix(MOSDEPTH.out.coverage.map { it[1] }.flatten())
+            BCFTOOLS_STATS(MERGE_HEADER.out.final_standard_vcf.mix(POST_TUMOR_ONLY.out.consensus_pass.map { it[1] }))
+            mqc_files = mqc_files.mix(BCFTOOLS_STATS.out.stats)
+        }
+        MULTIQC(mqc_files.collect())
+    }
+    // <<< qc
 }

@@ -7,6 +7,7 @@ process MKDUP {
     if (params.publish.tokenize(',').contains('markdup_bam')) {
         publishDir("${params.mkdup_dir}", mode: 'copy')
     }
+    publishDir("${params.mkdup_dir}", mode: 'copy', pattern: "*_markDuplicates_Matrix.txt")   // qc: always keep the metrics
     maxRetries 3
         
     input:
@@ -16,6 +17,7 @@ process MKDUP {
     tuple val(meta.patient), val(meta), path("*bam"), path("*bai"), emit: pair_mutect
     tuple val(meta), path("*bam"), path("*bai"), emit: mkdup_bam
     val(meta), emit: cleanup_trigger
+    path("*_markDuplicates_Matrix.txt"), emit: metrics   // qc: Picard metrics for MultiQC
 
     script:
     """

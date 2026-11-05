@@ -304,6 +304,33 @@ nextflow run main.nf -profile tscc_slurm,conda \
 
 Run one assay per run: the target BED and the CNVkit reference are per assay.
 
+<!-- >>> qc -->
+#### Sample identity (somalier) and the MultiQC report
+
+Conpair checks identity only for tumour–normal pairs, so tumour-only cohorts get no identity check from it. `--tool somalier` runs `somalier extract` on every BAM of the run (tumours, normals and normal-only pool rows), from either entry point, then one `somalier relate` across them all. A checker then compares the result with the sample sheet.
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--somalier_sites` | `release` | `release`: the public somalier sites (GRCh38 `sites.hg38.vcf.gz`, GRCh37 `sites.GRCh37.vcf.gz`), read from `<database>/Databases/<genome>/somalier/` or `--somalier_release_sites <file>`. `targets`: built once per run from common gnomAD SNPs (`--somalier_min_af` 0.2 to `--somalier_max_af` 0.8, from the Mutect2 germline resource) inside the padded `--targets`. Or a path to your own sites VCF |
+| `--somalier_swap_max_relatedness` | `0.6` | Two samples of the same patient below this are flagged `swap` |
+| `--somalier_dup_min_relatedness` | `0.7` | Samples of different patients at or above this are flagged `duplicate` (same person twice, or a mislabel) |
+| `--somalier_min_sites` | `50` | Pairs compared at fewer sites are not judged. Same-patient pairs below this are flagged `insufficient_sites` |
+| `--somalier_min_x_sites` | `10` | Informative chrX sites needed before sex is inferred |
+| `--multiqc` | `true` | One MultiQC report at the end of the run. `--multiqc false` skips it |
+
+The release sites are mostly exonic and miss most of a small panel. On a few-hundred-kb panel, use `--somalier_sites targets` and check the site count in the `SOMALIER_SITES` log line.
+
+Outputs:
+
+- `somalier/`: `somalier.pairs.tsv`, `somalier.samples.tsv`, `somalier.html`, `identity_sex.tsv` (inferred sex per sample), `extract/*.somalier`. Digests are named `<patient>_<sample>_<status>`, not by the BAM's `@RG SM`.
+- `REPORT/identity_flags.tsv` has one row per problem: `swap`, `duplicate`, `insufficient_sites` or `sex_mismatch`. It always has a header, and the log warns when it has rows.
+- Sex is checked only when the sheet has an optional `sex` column (`male`/`female`). Normals are checked against the X heterozygosity and X/Y depth. Tumours are flagged only for evidence a deletion cannot create (Y coverage in a declared female, or X heterozygosity in a declared male), because tumours often lose chrY or one chrX.
+
+Thresholds are looser than for germline–germline checks. Copy-number changes and LOH in the tumour lower its relatedness to its own normal: in the synthetic test, a tumour with LOH on four chromosomes scored 0.8 to 0.9, against about 1.0 for germline duplicates. Unrelated people score around 0, and first-degree relatives around 0.5. Lower `--somalier_swap_max_relatedness` for very rearranged tumours, and treat a flag as a reason to check, not proof of a swap.
+
+`MultiQC/multiqc_report.html` combines, where present, FastQC (`mapping` entry), Picard MarkDuplicates metrics (`mapping`/`markdup`, now always kept in `MKDUP/`), GATK BaseRecalibrator tables (`mapping`/`markdup`/`recalibration`), mosdepth, somalier, and `bcftools stats` on the consensus VCFs (`MultiQC/bcftools_stats/`). It runs once, after all of these are finished. The report shows sample IDs, so keep it with the results.
+<!-- <<< qc -->
+
 ### Advanced Options
 
 #### Publishing Intermediate Files
