@@ -17,7 +17,8 @@ process BCFTOOLS_STATS {
     path("*.bcftools_stats.txt"), emit: stats
 
     script:
-    def base = vcf.name.replaceAll(/\.vcf(\.gz)?$/, '')
+    // vcf is staged as input/<name>; keep the output in the task root, named after the file only
+    def base = vcf.toString().tokenize('/')[-1].replaceAll(/\.vcf(\.gz)?$/, '')
     """
     bcftools stats ${vcf} > ${base}.bcftools_stats.txt
     """
