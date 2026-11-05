@@ -462,6 +462,35 @@ Thresholds are looser than for germline–germline checks, because copy-number c
 
 `MultiQC/multiqc_report.html` combines, where present, FastQC (`mapping` entry), Picard MarkDuplicates metrics (`mapping`/`markdup`, now always kept in `MKDUP/`), GATK BaseRecalibrator tables (`mapping`/`markdup`/`recalibration`), mosdepth, somalier, and `bcftools stats` on the consensus VCFs (`MultiQC/bcftools_stats/`). It runs once, after all of these are finished. The report shows sample IDs, so keep it with the results.
 <!-- <<< qc -->
+<!-- >>> purecn -->
+#### PureCN: purity, ploidy and allele-specific copy number (`--tool purecn`)
+
+[PureCN](https://bioconductor.org/packages/PureCN/) 2.16 (env `yml/purecn.yml`) estimates tumour purity and ploidy and calls integer, allele-specific copy number from targeted data, with or without a matched normal (the open analogue of Tempus's CONA). Needs `--type panel` or `--type exome`, `--genome GRCh38` (`hg38`) or `GRCh37` (`hg19`, chr-named reference). Steps, all in `Modules/PURECN/`:
+
+1. `PURECN_INTERVALS` (once): `IntervalFile.R` on the capture BED (`--targets`, or the genome's exome BED with `--type exome` and no `--targets`): GC content and gene symbols.
+2. `PURECN_COVERAGE` (every BAM, normal-only rows included): `Coverage.R`, GC-normalised unless `--purecn_gc_norm false`.
+3. `PURECN_NORMALDB` (once): `NormalDB.R` from all normals of the run (at least 2), published to `PureCN/normaldb/` with the intervals it was built on.
+4. `PURECN_SITES` (once) + `PURECN_SNPS` (per tumour): allele counts (`bcftools mpileup`) at the gnomAD SNPs with AF ≥ `--purecn_min_pop_af` inside the padded targets (from the Mutect2 germline resource), plus that tumour's Mutect2 PASS SNVs. The Mutect2 calls are only read, never changed. Sites get `INFO/DB` and `INFO/POP_AF`; in paired runs the Mutect2 PASS sites also get `SOMATIC`, and the matched normal is the second sample.
+5. `PURECN` (per tumour): `PureCN.R --fun-segmentation PSCBS` (joint log-ratio and B-allele frequency).
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--purecn_normaldb <dir>` | | Use a prebuilt normal DB (`normalDB*.rds` + `intervals.txt`, i.e. `PureCN/normaldb/` from an earlier run of the **same assay**) instead of building one. Needed for a tumour-only cohort with no normal rows |
+| `--purecn_matched_normal_coverage` | `false` | Paired tumours: normalise coverage against the matched normal instead of the normal DB. PureCN recommends the DB (it warns that `--normal` overrides its denoising). Without a DB (sheet with one normal), the matched normal is used |
+| `--purecn_min_purity`, `--purecn_max_purity` | `0.15`, `0.95` | Purity search range |
+| `--purecn_purity_window` | `0.15` | With a sheet column `purity` (pathology estimate, `0.55` or `55`): PureCN still searches the full range, then the most likely of its solutions within purity ± window is reported. If that is not PureCN's first choice, the outputs are regenerated for it through PureCN's curation path (`<id>.csv` then says `Curated` and why). `<id>_purity_check.tsv` records the decision and every candidate solution; if no solution falls within the window, PureCN's first choice is kept and the file says so. The sheet purity does not narrow the search: on the synthetic test, a 0.40–0.70 search around 0.55 (truth 0.60) produced a doubled-ploidy solution (0.70 / 5.2) |
+| `--purecn_mappability <bigWig>` | | Mappability track for `IntervalFile.R` (recommended for real assays) |
+| `--purecn_off_target` | `false` | Also use off-target bins |
+| `--purecn_gc_norm` | `true` | GC loess normalisation of each BAM's coverage (`Coverage.R`). Keep it on for real data, which has GC bias. `false` skips it; build and use a normal DB with the same setting |
+| `--purecn_min_pop_af` | `0.001` | gnomAD AF threshold for the SNP sites and the `DB` flag |
+| `--purecn_model`, `--purecn_sex`, `--purecn_args` | `betabin`, `?`, | Passed to `PureCN.R` (`--model`, `--sex`, extra arguments verbatim) |
+
+The run stops at startup if `purecn` is selected with neither normal rows nor `--purecn_normaldb`, if the sheet has one normal and tumour-only patients, if `--type genome`, or if a `purity` value is not a fraction or percentage.
+
+Outputs in `PureCN/<patient>_<sample>/`: `<id>.csv` (purity, ploidy, flags), `<id>_dnacopy.seg` (segments with integer `C`), `<id>_genes.csv` (gene-level copy number, amplification/deletion calls), `<id>_loh.csv` (allele-specific segments, LOH), `<id>_variants.csv` and `<id>.vcf.gz` (somatic/germline posteriors, cellular fraction, multiplicity), `<id>.pdf`, `<id>_chromosomes.pdf`, `<id>_local_optima.pdf`, `<id>.rds` (for manual curation with `PureCN.R --rds`), and `<id>_purecn_input.vcf.gz` (the allele counts). `PureCN/coverage/` keeps every BAM's coverage, so a bigger normal DB can be built later. Paired and tumour-only results of the same tumour are not interchangeable: tumour-only somatic/germline calls rely on population frequencies and the model.
+
+Tested on synthetic data only (`synthetic_test/purecn/`): six 2 Mb regions with planted gains, an amplification, losses and copy-neutral LOH at purity 0.6. The test runs with `--purecn_gc_norm false` only because the simulated coverage has no GC signal: there the loess fit has nothing to model and raised the per-target log-ratio SD from 0.13 to 1.4, so PureCN found no solution.
+<!-- <<< purecn -->
 
 ### Advanced Options
 
