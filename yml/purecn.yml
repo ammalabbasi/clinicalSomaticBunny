@@ -1,0 +1,15 @@
+name: purecn
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  - bioconductor-purecn=2.16.1
+  - r-pscbs=0.68.0
+  - r-optparse
+  - bioconductor-txdb.hsapiens.ucsc.hg38.knowngene
+  - bioconductor-txdb.hsapiens.ucsc.hg19.knowngene
+  - bioconductor-org.hs.eg.db
+  - bcftools=1.21
+  - htslib=1.21
