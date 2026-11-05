@@ -18,7 +18,11 @@ process CNVkit_flatref {
     path("reference.flat.cnn"), emit: CNVkit_ref_cnn
 
     script:
-    def regions = params.targeted ? "--targets \"${params.mosdepth_bed}\"" : "--method wgs"
+    // Targeted: on-target bins only (--method amplicon). With hybrid mode a flat reference keeps every antitarget
+    // bin at full weight with no per-bin expectation; empty or noisy off-target bins are then centred to 0 and
+    // dilute whole-chromosome segments (synthetic test: CN3 gain read as log2 +0.13). CNVkit.nf must use the
+    // same method with this reference.
+    def regions = params.targeted ? "--method amplicon --targets \"${params.mosdepth_bed}\"" : "--method wgs"
     """
     export PYTHONNOUSERSITE=1
     unset PYTHONPATH

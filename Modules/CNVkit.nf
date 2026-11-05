@@ -18,7 +18,8 @@ process CNVkit {
 
     script:
     def output_prefix = "${map.patient}_${map.sample}"
-    def method_option = params.targeted ? "" : "--method wgs"
+    // The method must match the reference: a targeted flat reference is built on-target only (amplicon).
+    def method_option = !params.targeted ? "--method wgs" : (params.cnvkit_ref_mode == 'flat' ? "--method amplicon" : "")
 
     """
     export PYTHONNOUSERSITE=1
