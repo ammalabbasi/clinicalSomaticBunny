@@ -17,6 +17,23 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
+// >>> purecn
+params.purecn_normaldb = null           // dir with normalDB*.rds + intervals.txt (a previous run's PureCN/normaldb/); else built from this run's normals
+params.purecn_mappability = null        // optional mappability bigWig/BED for IntervalFile.R (same contig names as --ref)
+params.purecn_off_target = false        // add off-target bins (IntervalFile.R --off-target)
+params.purecn_assay = ""                // assay name used in the normal DB file name
+params.purecn_min_pop_af = 0.001        // gnomAD AF threshold for the germline SNP sites (and the DB flag)
+params.purecn_min_mapq = 20             // allele counting at SNP sites (bcftools mpileup -q)
+params.purecn_min_bq = 20               // allele counting at SNP sites (bcftools mpileup -Q)
+params.purecn_min_purity = 0.15         // purity search range when the sheet has no `purity` for a tumour
+params.purecn_max_purity = 0.95
+params.purecn_purity_window = 0.15      // with a sheet `purity` (pathology estimate): search purity +- this
+params.purecn_model = "betabin"         // PureCN.R --model (beta | betabin)
+params.purecn_sex = "?"                 // PureCN.R --sex (? detect | F | M | diploid)
+params.purecn_matched_normal_coverage = false  // paired: normalise against the matched normal instead of the normal DB
+params.purecn_args = ""                 // extra PureCN.R arguments, passed verbatim
+params.purecn_gc_norm = true            // GC loess normalisation of coverage (Coverage.R); keep true for real data
+// <<< purecn
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
@@ -385,6 +402,87 @@ params.gatk_env = "${projectDir}/yml/gatk_runtime.yml"
 params.POST_env = "${projectDir}/yml/POST.yml"
 params.POST_rename_env = "${projectDir}/yml/POST_rename.yml"
 params.gatk = "${params.database_path}/gatk-4.6.2.0/gatk"
+// >>> purecn
+params.purecn_dir = "${params.results_dir}/PureCN"
+params.purecn_env = "${projectDir}/yml/purecn.yml"
+// PureCN (--tool purecn): targeted assays on GRCh38/GRCh37 only. Needs a normal DB: built from >= 2 normal rows of the
+// sheet (paired or normal-only), or a prebuilt one (--purecn_normaldb). With exactly one normal and no DB, only that
+// patient's paired tumour can run (against its matched normal). Optional sheet column `purity` (0-1, or 1-100 %)
+// bounds the purity search per tumour. Reads only the sheet (IDs, status, purity), never a BAM.
+// Set before the includes: modules only see params that exist when they are included.
+params.purecn_genome = [GRCh38: 'hg38', GRCh37: 'hg19'][params.genome]
+params.purecn_targets = params.targets_clean ?: params.genomes[params.genome].mosdepth_bed
+def purecnPurity = [:]
+def purecnBuildDb = false
+if (params.tool && params.tool.toString().split(',').collect { it.trim() }.contains('purecn')) {
+    if (!params.purecn_genome) {
+        error "--tool purecn needs --genome GRCh38 or GRCh37 (PureCN genome hg38/hg19)."
+    }
+    if (!params.targeted) {
+        error "--tool purecn is for targeted data: use --type panel (with --targets) or --type exome."
+    }
+    if (!file(params.purecn_targets).exists()) {
+        error "--tool purecn: target BED not found: ${params.purecn_targets}"
+    }
+    if (!file(params.mutect2_germline).exists() || !file("${params.mutect2_germline}.tbi").exists()) {
+        error "--tool purecn needs the gnomAD germline resource and its .tbi: ${params.mutect2_germline}"
+    }
+    if (params.purecn_normaldb) {
+        def dbDir = file(params.purecn_normaldb)
+        if (!dbDir.isDirectory() || !dbDir.listFiles().any { it.name ==~ /normalDB.*\.rds/ } ||
+            !file("${params.purecn_normaldb}/intervals.txt").exists()) {
+            error "--purecn_normaldb must be a directory with normalDB*.rds and intervals.txt " +
+                  "(the PureCN/normaldb/ folder of an earlier run of the same assay): ${params.purecn_normaldb}"
+        }
+    }
+    if (params.purecn_mappability && !file(params.purecn_mappability).exists()) {
+        error "--purecn_mappability file not found: ${params.purecn_mappability}"
+    }
+    def pSheet = file(params.sample)
+    def pLines = pSheet.exists() ? pSheet.readLines().findAll { it.trim() } : []
+    def pHead = pLines ? pLines[0].split(',').collect { it.trim() } : []
+    def iP = pHead.indexOf('patient'), iS = pHead.indexOf('sample'), iT = pHead.indexOf('status')
+    def iPur = pHead.indexOf('purity')
+    def nNormals = 0
+    def pTumorPts = [] as Set, pNormalPts = [] as Set
+    def purityProblems = []
+    if (iP < 0 || iS < 0 || iT < 0) pLines = []   // the sheet checks below report the missing columns
+    pLines.drop(1).each { line ->
+        def f = line.split(',', -1) as List
+        if (f.size() != pHead.size()) return
+        if (f[iT] == 'normal') { nNormals++; pNormalPts << f[iP] }
+        if (f[iT] == 'tumor') pTumorPts << f[iP]
+        if (iPur >= 0 && f[iT] == 'tumor' && f[iPur]) {
+            def v = f[iPur].isNumber() ? (f[iPur] as double) : -1d
+            if (v > 1 && v <= 100) v = v / 100
+            if (v <= 0 || v > 1) purityProblems << "${f[iP]},${f[iS]}: purity '${f[iPur]}' is not a fraction (0-1] or a percentage"
+            else purecnPurity[(f[iP] + "_" + f[iS]).toString()] = v
+        }
+    }
+    if (purityProblems) {
+        error "Sample sheet ${params.sample}, column purity:\n  " + purityProblems.join('\n  ')
+    }
+    if (!params.purecn_normaldb) {
+        if (nNormals == 0) {
+            error "--tool purecn needs normals for its normal DB: add normal rows (normal-only rows are fine) or give " +
+                  "--purecn_normaldb <dir> from an earlier run of the same assay."
+        }
+        purecnBuildDb = nNormals >= 2
+        if (!purecnBuildDb && (pTumorPts - pNormalPts)) {
+            error "--tool purecn: the sheet has one normal, and tumour-only patients need a normal DB of >= 2 normals. " +
+                  "Add normal-only rows or give --purecn_normaldb <dir>."
+        }
+        if (!purecnBuildDb) {
+            log.warn "PureCN: one normal only, so no normal DB; the paired tumour is normalised against its matched normal."
+        }
+    }
+    log.info "PureCN: genome ${params.purecn_genome}, targets ${params.purecn_targets}, normal DB " +
+             (params.purecn_normaldb ?: (purecnBuildDb ? "built from ${nNormals} normals" : 'none')) +
+             (purecnPurity ? ", sheet purity for ${purecnPurity.size()} tumour(s)" : '')
+}
+params.purecn_purity_map = purecnPurity
+params.purecn_build_normaldb = purecnBuildDb
+// <<< purecn
 
 // Write configuration to log file
 writeToLog(params.log_file, configInfo)
@@ -465,6 +563,9 @@ include { PREPARE_TARGETS } from './Modules/TARGETS/PREPARE_TARGETS'
 include { GENERATE_TARGET_INTERVALS } from './Modules/TARGETS/GENERATE_TARGET_INTERVALS'
 include { POST_TUMOR_ONLY } from './Modules/POST_TUMOR_ONLY'
 include { GENERATE_INTERVALS } from './Modules/GENERATE_INTERVALS'
+// >>> purecn
+include { PURECN_WF } from './Modules/PURECN/PURECN_WF'
+// <<< purecn
 
 include { POST } from './Modules/POST.nf'
 include { POST_rename } from './Modules/POST_rename.nf'
@@ -1115,6 +1216,13 @@ workflow {
                 MANTA(RECALIBRATE_out_MAP_CN)
             }
 
+            // >>> purecn
+            // PureCN: every BAM (normals incl. normal-only rows, tumours) + this run's Mutect2 filtered calls
+            if (isToolSelected('purecn')) {
+                PURECN_WF(normal.mix(tumor), FILTER_OUT.Mutect2_out)
+            }
+            // <<< purecn
+
         } else {
 
             RECALIBRATE_out.pair_recal.filter{it[1].status == 'normal'}.set{normal}
@@ -1302,6 +1410,12 @@ workflow {
 	    if (params.tool && params.tool.contains('manta')) {
 	        MANTA(RECALIBRATE_out_MAP_CN)
 	    }
+
+            // >>> purecn
+            if (isToolSelected('purecn')) {
+                PURECN_WF(normal.mix(tumor), FILTER_OUT.Mutect2_out)
+            }
+            // <<< purecn
         }
     }
 
