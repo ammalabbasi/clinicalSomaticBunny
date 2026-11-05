@@ -528,6 +528,13 @@ bash Modules/PCGR/install_pcgr.sh $D vep GRCh38       # Ensembl VEP 115 cache, 2
 **Output:** `PCGR/<patient>_<sample>/`: `<id>.pcgr.grch38.html` (report), `.xlsx`, `.snv_indel_ann.tsv.gz`, `.tmb.tsv`, `.pass.vcf.gz` and the rest of PCGR's files, plus the prepared input (`<id>.pcgr_input.vcf.gz`) and a one-line count summary. **These reports contain patient-level clinical results. Keep them on the cluster in a protected `--outdir`. Do not email, upload or commit them.**
 <!-- <<< pcgr -->
 
+#### Consensus edge cases and valid standard VCFs (edited copies; originals kept)
+
+Two fixes to the paired consensus (POST) steps. The original scripts and modules stay unchanged in the repository (`scenario3.sh`–`scenario6.sh`, `Modules/POST_scenario3.nf`–`POST_scenario6.nf`, `Modules/MERGE_HEADER.nf`). The pipeline runs edited copies:
+
+- **No consensus mutations is reported, not fatal.** The originals stopped the whole run (`ERROR: bseq filter produced empty output!`) when a tumour had no consensus SNVs, which is common for quiet tumours on small panels, and skipped that tumour's indels. `scenarioN_clinical.sh` (run by `Modules/POST_clinical/POST_scenarioN.nf`) writes header-only SNV files, still processes the indels, and records counts in `POST/<patient>_<sample>/<scenario>/<id>_<scenario>_consensus_status.tsv`. All tumours are collected in `REPORT/consensus_status.tsv`, where `status = NO_CONSENSUS_MUTATIONS` marks a tumour with neither SNVs nor indels, and the log warns. To run the original scripts, use `--post_original_scripts true`.
+- **Valid standard VCFs alongside the originals.** `MERGE_HEADER` writes `POST/standard_vcf/<id>/<id>_<scenario>_standard_PASSed.vcf` exactly as before. Those files do not parse in bcftools/htslib: they have undeclared INFO, filter strings split into bogus INFO keys, 9-column indel rows, and header lines after `#CHROM`. `Modules/POST_clinical/MERGE_HEADER.nf` also writes `<id>_<scenario>_standard_PASSed.fixed.vcf.gz` (+ `.tbi`). It is sites-only with the same records, `FILTER=PASS`, `INFO/callers`, `INFO/caller_filter`, and the original per-caller INFO kept losslessly in `INFO/SB_CALLER_INFO` (percent-encoded). Its header records the exact commands used: `##SomaticBunny_originalMergeCommand` (the original `merge_header.sh` + `cat` merge, which does not use bcftools), `##SomaticBunny_fixCommand`, `##SomaticBunny_bcftoolsSortCommand`, `##SomaticBunny_bcftoolsIndexCommand` and `##SomaticBunny_bcftoolsValidateCommand`. bcftools also adds its own `##bcftools_*` lines. The run fails if the fixed file does not parse.
+
 ### Advanced Options
 
 #### Publishing Intermediate Files

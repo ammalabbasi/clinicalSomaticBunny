@@ -17,6 +17,7 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
+params.post_original_scripts = false  // true: POST scenarios 3-6 run the original scenarioN.sh (stop on an empty SNV consensus)
 // >>> msi
 params.msi_threshold_paired = 10      // MSI-H when % unstable sites >= this, paired (msisensor-pro msi; MSK-IMPACT MSIsensor cut-off)
 params.msi_threshold_tumor_only = 20  // MSI-H cut-off for tumour-only (msisensor-pro pro vs baseline); calibrate per assay
@@ -848,11 +849,12 @@ include { POST } from './Modules/POST.nf'
 include { POST_rename } from './Modules/POST_rename.nf'
 include { POST_scenario1 } from './Modules/POST_scenario1.nf'
 include { POST_scenario2 } from './Modules/POST_scenario2.nf'
-include { POST_scenario3 } from './Modules/POST_scenario3.nf'
-include { POST_scenario4 } from './Modules/POST_scenario4.nf'
-include { POST_scenario5 } from './Modules/POST_scenario5.nf'
-include { POST_scenario6 } from './Modules/POST_scenario6.nf'
-include { MERGE_HEADER } from './Modules/MERGE_HEADER.nf'
+// Clinical copies of POST scenarios 3-6 and MERGE_HEADER (originals kept unchanged in Modules/; --post_original_scripts)
+include { POST_scenario3 } from './Modules/POST_clinical/POST_scenario3.nf'
+include { POST_scenario4 } from './Modules/POST_clinical/POST_scenario4.nf'
+include { POST_scenario5 } from './Modules/POST_clinical/POST_scenario5.nf'
+include { POST_scenario6 } from './Modules/POST_clinical/POST_scenario6.nf'
+include { MERGE_HEADER } from './Modules/POST_clinical/MERGE_HEADER.nf'
 // >>> tmb
 include { TMB } from './Modules/TMB/TMB.nf'
 // <<< tmb
@@ -1996,6 +1998,19 @@ workflow {
 
 		MERGE_HEADER(merge_all)
 
+        // >>> consensus_status
+        // Clinical edit: a tumour with no consensus mutations is reported, not fatal (scenarioN_clinical.sh).
+        POST_scenario3.out.status.mix(POST_scenario4.out.status, POST_scenario5.out.status, POST_scenario6.out.status)
+            .map { patient_sample, f -> f }
+            .collectFile(name: 'consensus_status.tsv', storeDir: "${params.results_dir}/REPORT", keepHeader: true, skip: 1, sort: true)
+            .subscribe { f ->
+                def none = f.readLines().drop(1).findAll { it.contains('NO_CONSENSUS_MUTATIONS') }
+                if (none) {
+                    log.warn "${none.size()} tumour/scenario row(s) have NO consensus mutations (run continued): REPORT/consensus_status.tsv"
+                }
+            }
+        // <<< consensus_status
+
         // >>> vep
         // VEP + vcf2maf: the paired standard consensus VCF of --vep_scenario and the tumour-only PASS consensus,
         // one MAF per sample, then MAF/cohort.maf with an Analysis_Mode column.
@@ -2221,7 +2236,7 @@ workflow {
         }
         if (humanGenome) {
             mqc_files = mqc_files.mix(MOSDEPTH.out.coverage.map { it[1] }.flatten())
-            BCFTOOLS_STATS(MERGE_HEADER.out.final_standard_vcf.mix(POST_TUMOR_ONLY.out.consensus_pass.map { it[1] }))
+            BCFTOOLS_STATS(MERGE_HEADER.out.fixed_standard_vcf.map { it[0] }.mix(POST_TUMOR_ONLY.out.consensus_pass.map { it[1] }))
             mqc_files = mqc_files.mix(BCFTOOLS_STATS.out.stats)
         }
         MULTIQC(mqc_files.collect())
