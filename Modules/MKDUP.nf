@@ -20,8 +20,9 @@ process MKDUP {
     path("*_markDuplicates_Matrix.txt"), emit: metrics   // qc: Picard metrics for MultiQC
 
     script:
+     def xmx = task.memory ? (task.memory.mega * 0.8).intValue() : 4096
     """
-    picard MarkDuplicates ASSUME_SORT_ORDER=coordinate MAX_FILE_HANDLES=4000 MAX_RECORDS_IN_RAM=1000000 CREATE_INDEX=true -Djava.io.tmpdir=${params.mkdup_temp_dir} -XX:ParallelGCThreads=${task.cpus} -Xmx16g VALIDATION_STRINGENCY=STRICT I=${bam} O=${meta.patient}_${meta.sample}_${meta.status}_mkdp.bam M=${meta.patient}_${meta.sample}_${meta.status}_markDuplicates_Matrix.txt
+    picard MarkDuplicates ASSUME_SORT_ORDER=coordinate MAX_FILE_HANDLES=4000 MAX_RECORDS_IN_RAM=1000000 CREATE_INDEX=true -Djava.io.tmpdir=${params.mkdup_temp_dir} -XX:ParallelGCThreads=${task.cpus} -Xmx${xmx}M VALIDATION_STRINGENCY=STRICT I=${bam} O=${meta.patient}_${meta.sample}_${meta.status}_mkdp.bam M=${meta.patient}_${meta.sample}_${meta.status}_markDuplicates_Matrix.txt
     
     """
 }

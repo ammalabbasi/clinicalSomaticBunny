@@ -28,7 +28,20 @@ process MUTECT2_CALLING {
     def normal_args = map.normal ? "--normal-sample ${map.patient}_${map.normal_meta.sample}_normal --input ${map.normal}" : ""
     def pon_vcf = (pon instanceof List ? pon : [pon]).find { it && !(it.name ==~ /.*\.(tbi|idx)$/) }
     def pon_args = pon_vcf ? "-pon ${pon_vcf}" : ""
+    // Clinical: tumour-only keeps --af-of-alleles-not-in-resource 0.00003125 (the original SomaticBunny value; upstream
+    // dropped it for pairs). With the GATK default, 8/15 planted germline SNPs passed in a synthetic tumour-only test.
+    def tonly_args = map.normal ? "" : "--af-of-alleles-not-in-resource 0.00003125"
     """
-    ${params.gatk} Mutect2 -independent-mates -R ${params.ref} ${pon_args} --germline-resource ${params.mutect2_germline} --native-pair-hmm-threads ${task.cpus} --af-of-alleles-not-in-resource 0.00003125 --f1r2-tar-gz ${map.patient}_${map.tumor_meta.sample}_${chunk}-f1r2.tar.gz ${normal_args} --tumor-sample ${map.patient}_${map.tumor_meta.sample}_tumor --input ${map.tumor} -L ${interval_dir}/${chunk}-scattered.interval_list -O ${map.patient}_${map.tumor_meta.sample}_${chunk}-unfiltered.vcf
+    ${params.gatk} Mutect2 \\
+        -R ${params.ref} \\
+        ${pon_args} \\
+        --germline-resource ${params.mutect2_germline} \\
+        --native-pair-hmm-threads ${task.cpus} \\
+        ${normal_args} \\
+        --input ${map.tumor} \\
+        ${tonly_args} \\
+        --f1r2-tar-gz ${map.patient}_${map.tumor_meta.sample}_${chunk}-f1r2.tar.gz \\
+        -L ${interval_dir}/${chunk}-scattered.interval_list \\
+        -O ${map.patient}_${map.tumor_meta.sample}_${chunk}-unfiltered.vcf
     """
 }

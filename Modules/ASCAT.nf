@@ -5,8 +5,6 @@ process ASCAT {
     scratch true
     label 'process_medium'
     publishDir("${params.ascat_dir}", mode: 'copy')
-    errorStrategy = { task.attempt <= maxRetries ? 'retry' : 'ignore'}
-    maxRetries 3
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/cancerit-allelecount:4.3.0--h41abebc_0' :
         'biocontainers/cancerit-allelecount:4.3.0--h41abebc_0' }"
@@ -42,7 +40,7 @@ process ASCAT {
     alleles.prefix = "${params.ascat_allele_prefix}",
     loci.prefix = "${params.ascat_loci_prefix}",
     gender = "${map.gender}",
-    nthreads = "8",
+    nthreads = ${task.cpus},
     genomeVersion = "${params.ascat_ref_genome_version}")
 
     # Running ASCAT

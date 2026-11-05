@@ -88,6 +88,17 @@ This pipeline is designed to work with paired tumor-normal whole-genome or whole
    ```
    </details>
 
+  > [!NOTE]
+  > **One FASTQ pair per sample.** `sample.csv` takes exactly one `fastq_1`/`fastq_2` pair per
+  > sample. If a sample was sequenced on several lanes or runs, concatenate the lanes into one
+  > pair before running the pipeline. Each BAM therefore carries a single read group:
+  > `ID`, `SM` and `LB` are `<patient>_<sample>_<status>`, `PL` is `ILLUMINA`, and `PU` is the
+  > flowcell and lane of the first read (or the sample name if the read names are not in the
+  > Illumina format). Because merged lanes share one read group, base quality score
+  > recalibration models one error profile per sample rather than per lane.
+  > bwa-mem2 runs with `-Y` (soft-clipped supplementary alignments) and a fixed batch size
+  > `-K 160000000`, so alignments do not depend on the number of CPUs assigned.
+
 
 
 ## Configuration
@@ -155,6 +166,13 @@ The SomaticBunny pipeline workflow is divided into multiple steps that can be ru
 | GRCh37  | 
 | mm39  | 
 | RN7  | 
+
+> [!NOTE]
+> **`--type genome` vs `--type exome`.** The SNV/INDEL callers run on the same regions for both
+> data types: the callable-regions BED (`--bed`, by default the primary chromosomes of the
+> selected genome). `--type exome` does not restrict calling to exome targets. It only switches
+> Strelka and Manta to `--exome` mode, MuSE to `-E`, base quality score recalibration to the
+> exome interval list, and mosdepth and ASCAT to their exome resources.
 
 ##### Available Tools
 
@@ -528,12 +546,20 @@ bash Modules/PCGR/install_pcgr.sh $D vep GRCh38       # Ensembl VEP 115 cache, 2
 **Output:** `PCGR/<patient>_<sample>/`: `<id>.pcgr.grch38.html` (report), `.xlsx`, `.snv_indel_ann.tsv.gz`, `.tmb.tsv`, `.pass.vcf.gz` and the rest of PCGR's files, plus the prepared input (`<id>.pcgr_input.vcf.gz`) and a one-line count summary. **These reports contain patient-level clinical results. Keep them on the cluster in a protected `--outdir`. Do not email, upload or commit them.**
 <!-- <<< pcgr -->
 
-#### Consensus edge cases and valid standard VCFs (edited copies; originals kept)
+#### Consensus output: final VCFs with commands in the header, and "no consensus mutations"
 
-Two fixes to the paired consensus (POST) steps. The original scripts and modules stay unchanged in the repository (`scenario3.sh`–`scenario6.sh`, `Modules/POST_scenario3.nf`–`POST_scenario6.nf`, `Modules/MERGE_HEADER.nf`). The pipeline runs edited copies:
+The paired consensus is upstream's `POST_SCENARIOS` (`consensus_scenarios.sh`, all six scenarios in one task). It writes valid sites-only VCFs and continues when a tumour has no candidate SNVs. On top of it, the clinical branch adds `POST_FINAL_VCF` for scenarios 3–6:
 
-- **No consensus mutations is reported, not fatal.** The originals stopped the whole run (`ERROR: bseq filter produced empty output!`) when a tumour had no consensus SNVs, which is common for quiet tumours on small panels, and skipped that tumour's indels. `scenarioN_clinical.sh` (run by `Modules/POST_clinical/POST_scenarioN.nf`) writes header-only SNV files, still processes the indels, and records counts in `POST/<patient>_<sample>/<scenario>/<id>_<scenario>_consensus_status.tsv`. All tumours are collected in `REPORT/consensus_status.tsv`, where `status = NO_CONSENSUS_MUTATIONS` marks a tumour with neither SNVs nor indels, and the log warns. To run the original scripts, use `--post_original_scripts true`.
-- **Valid standard VCFs alongside the originals.** `MERGE_HEADER` writes `POST/standard_vcf/<id>/<id>_<scenario>_standard_PASSed.vcf` exactly as before. Those files do not parse in bcftools/htslib: they have undeclared INFO, filter strings split into bogus INFO keys, 9-column indel rows, and header lines after `#CHROM`. `Modules/POST_clinical/MERGE_HEADER.nf` also writes `<id>_<scenario>_standard_PASSed.fixed.vcf.gz` (+ `.tbi`). It is sites-only with the same records, `FILTER=PASS`, `INFO/callers`, `INFO/caller_filter`, and the original per-caller INFO kept losslessly in `INFO/SB_CALLER_INFO` (percent-encoded). Its header records the exact commands used: `##SomaticBunny_originalMergeCommand` (the original `merge_header.sh` + `cat` merge, which does not use bcftools), `##SomaticBunny_fixCommand`, `##SomaticBunny_bcftoolsSortCommand`, `##SomaticBunny_bcftoolsIndexCommand` and `##SomaticBunny_bcftoolsValidateCommand`. bcftools also adds its own `##bcftools_*` lines. The run fails if the fixed file does not parse.
+- `POST/<patient>_<sample>/scenario_N/<id>_final.vcf.gz` (+ `.tbi`): upstream's `<id>_final.vcf`, sorted and indexed. Its header records the exact commands that produced it:
+  - `##SomaticBunny_consensusCommand`: the `consensus_scenarios.sh` call, with its arguments.
+  - `##SomaticBunny_combineCommand`
+  - `##SomaticBunny_bcftoolsAnnotateCommand`, `##SomaticBunny_bcftoolsSortCommand`, `##SomaticBunny_bcftoolsIndexCommand` and `##SomaticBunny_bcftoolsValidateCommand`.
+  - bcftools' own `##bcftools_*` lines.
+
+  The run fails if this file does not parse. Upstream's plain `<id>_final.vcf` is unchanged.
+- `REPORT/consensus_status.tsv`: one row per tumour and scenario (`n_snv`, `n_indel`, `status`). `NO_CONSENSUS_MUTATIONS` marks a tumour with neither SNVs nor indels, and the log warns. The run continues, and AlleleCounter (VAF) is skipped for those tumours because it crashes on an empty VCF.
+
+VEP (`--vep_scenario`), PCGR (`--pcgr_scenario`), TMB and the MultiQC bcftools stats read these scenario VCFs.
 
 ### Advanced Options
 
@@ -583,11 +609,39 @@ RESULTS/
 ├── mosdepth
 ├── MuSE
 ├── Mutect2
+├── POST
+│   ├── <patient>_<sample>/scenario1 ... scenario_6   consensus SNV and INDEL calls per scenario
+│   └── VAF                                           allele counts and VAFs for the scenario 4-6 consensus calls
 ├── RECALIBRATE (optional)
 ├── REPORT
 ├── SAGE
 └── STRELKA
 ```
+
+### Variant allele fractions (`RESULTS/POST/VAF`)
+
+For each tumor sample and each of scenarios 4, 5 and 6, the pipeline writes
+`<patient>_<sample>_<scenario>_VAF.tsv`: one row per consensus variant, 21 fixed
+tab-separated columns, header without `#`, so it loads directly into pandas or R.
+
+| Column | Content |
+|--------|---------|
+| `sample` | `<patient>_<sample>_<scenario>` |
+| `CHROM`, `POS`, `ID`, `REF`, `ALT` | as in the consensus VCF |
+| `TYPE` | `SNV`, `INDEL`, `MNP`, `MULTIALLELIC` or `INVALID` |
+| `FILTER` | consensus FILTER (`PASS`, `OnePassCaller`, `NoPassCaller`) |
+| `CALLERS`, `PASS_CALLERS`, `CALLER_FILTERS` | callers that reported the variant, those that passed, and each caller's filter value |
+| `TUMOR_REF`, `TUMOR_ALT`, `TUMOR_DEPTH`, `TUMOR_VAF` | tumor counts and `ALT / DEPTH` |
+| `NORMAL_REF`, `NORMAL_ALT`, `NORMAL_DEPTH`, `NORMAL_VAF` | the same for the matched normal |
+| `STATUS` | `OK`, `NO_COVERAGE` (depth 0 in tumor or normal), or why counts are `NA` (`MNP`, `MULTIALLELIC`, `INVALID`) |
+| `NORMALIZED` | `.`, or `POS:REF>ALT` of the left-aligned indel that was counted when it differs from the VCF record |
+
+SNV counts come from alleleCounter (base quality >= 20, mapping quality >= 35); depth is
+alleleCounter's `Good_depth`. INDEL counts are taken from the BAMs with the same thresholds:
+a read supports `ALT` only if it carries exactly the called event after left-normalisation,
+supports `REF` only if it is aligned without any indel across the event, and is otherwise
+excluded; depth is `REF + ALT`. The raw alleleCounter outputs
+(`*_tumor_alleleCounter.txt`, `*_normal_alleleCounter.txt`) are kept next to the table.
 
 ## Tool Versions
 

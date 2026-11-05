@@ -17,7 +17,6 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
-params.post_original_scripts = false  // true: POST scenarios 3-6 run the original scenarioN.sh (stop on an empty SNV consensus)
 // >>> msi
 params.msi_threshold_paired = 10      // MSI-H when % unstable sites >= this, paired (msisensor-pro msi; MSK-IMPACT MSIsensor cut-off)
 params.msi_threshold_tumor_only = 20  // MSI-H cut-off for tumour-only (msisensor-pro pro vs baseline); calibrate per assay
@@ -197,7 +196,7 @@ if (params.tool && params.tool.toString().split(',').collect { it.trim() }.conta
         error "--tool vep annotates human calls only: --vep_assembly/--genome must be GRCh38 or GRCh37 (got '${vepAssembly}')."
     }
     if (!(params.vep_scenario in ['scenario_3', 'scenario_4', 'scenario_5', 'scenario_6'])) {
-        error "--vep_scenario must be scenario_3, scenario_4, scenario_5 or scenario_6 (the MERGE_HEADER standard VCFs)."
+        error "--vep_scenario must be scenario_3, scenario_4, scenario_5 or scenario_6 (the POST_SCENARIOS final VCFs)."
     }
     if (!params.vep_cache) {
         error "--tool vep needs --vep_cache <dir> holding homo_sapiens/${params.vep_cache_version}_${vepAssembly}/ (an indexed Ensembl VEP cache)."
@@ -221,6 +220,11 @@ Pipeline Run - ${new Date()}
 if (!params.database_path) {
     error "ERROR: --database_path is required. Please provide the path to your SomaticBunny_database directory.\n" +
           "Usage: nextflow run main.nf --database_path /path/to/SomaticBunny_database"
+}
+
+if (!(params.type in ['genome', 'exome', 'panel'])) {
+    error "ERROR: --type must be 'genome', 'exome' or 'panel' (got: ${params.type == null ? 'not set' : "'${params.type}'"}).\n" +
+          "Usage: nextflow run main.nf --type [genome|exome|panel] --genome [GRCh38|GRCh37|mm39|RN7] ..."
 }
 
 params.genomes = [
@@ -254,7 +258,6 @@ params.genomes = [
         ],
         database_subdir: "GRCh38",
         mutect2_pon: "MuTect2.PON.5210.vcf.gz",
-        mutect2_pon_wes: "MuTect2.PON.5210.vcf.gz",
         mutect2_germline: "af-only-gnomad.hg38_no_alt.vcf.gz",
         mutect2_interval_dir: "GRCh38_interval_list_20",
         delly_excl: "${params.database_path}/Databases/GRCh38/Delly/human.hg38.excl.tsv",
@@ -290,7 +293,6 @@ params.genomes = [
         ],
         database_subdir: "GRCh37",
         mutect2_pon: "Mutect2-WGS-panel-b37.vcf",
-        mutect2_pon_wes: "Mutect2-exome-panel_b37.vcf",
         mutect2_germline: "af-only-gnomad.raw.sites.grch37.vcf.gz",
         mutect2_interval_dir: "GRCh37_interval_list_20",
         delly_excl: "${params.database_path}/Databases/GRCh37/Delly/human.hg19.excl.tsv",
@@ -304,7 +306,6 @@ params.genomes = [
         recal_interval_wes: "${params.database_path}/Databases/mm39/mm39_exome.interval_list",
         muse_vcf: "${params.database_path}/Databases/mm39/af_only_mgp_mm39_unique.vcf.gz",
         mutect2_pon: "PoN.mm39.vcf.gz",
-        mutect2_pon_wes: "PoN.mm39.vcf.gz",
         mutect2_germline: "af-only-mgp.mm39.vcf.gz",
         mutect2_interval_dir: "mm39_interval_list_20",
         tools: ["fastqc", "bwa_mem", "mkdup", "strelka", "muse", "mutect2", "cnvkit", "mosdepth", "manta"]
@@ -317,7 +318,6 @@ params.genomes = [
         recal_interval_wes: "${params.database_path}/Databases/RN7/rn7_exome.interval_list",
         muse_vcf: "",
         mutect2_pon: "",
-        mutect2_pon_wes: "",
         mutect2_germline: "af-only_rn7.vcf.gz",
         mutect2_interval_dir: "RN7_interval_list_20",
         tools: ["fastqc", "bwa_mem", "mkdup", "strelka", "muse", "mutect2", "cnvkit", "mosdepth", "manta"]
@@ -570,8 +570,47 @@ if (somalierSelected) {
 params.somalier_sites_file = somalierSitesFile
 // <<< qc
 
-params.indel_vaf_script =
-    params.indel_vaf_script ?: "${projectDir}/INDEL_VAF.py"
+params.vaf_script = params.vaf_script ?: "${projectDir}/VAF.py"
+
+// Custom reference: every packaged resource this run will use must share the reference's contig names and
+// lengths. severity = what the consuming tool does on a mismatch: GATK aborts ('error'); SAGE, mosdepth, MuSE,
+// Strelka/Manta and Delly silently ignore or mis-annotate ('warn'). A missing file is always an error.
+if (params.custom_ref) {
+    def human = params.genome in ['GRCh38', 'GRCh37']
+    def tools = params.tool ? params.tool.toString().split(',')*.trim() : []
+    def resources = [
+        [label: '--ref_dict',       path: params.ref_dict,         kind: 'dict'],
+        [label: '--bed',            path: params.bed,              kind: 'bed', severity: 'warn'],
+        [label: 'Mutect2 germline', path: params.mutect2_germline, kind: 'vcf'],
+        [label: 'Mutect2 PON',      path: params.mutect2_pon,      kind: 'vcf'],
+        [label: 'MuSE dbSNP',       path: params.muse_vcf,         kind: 'vcf', severity: 'warn'],
+    ]
+    if (params.targeted)
+        resources << [label: 'mosdepth exome BED', path: params.mosdepth_bed, kind: 'bed', severity: 'warn']
+    if (human && params.first_step != 'variant_calling') {
+        resources << [label: 'BQSR known sites 1', path: params.recal_knownsite1, kind: 'vcf']
+        resources << [label: 'BQSR known sites 2', path: params.recal_knownsite2, kind: 'vcf']
+        if (params.targeted)
+            resources << [label: 'BQSR exome intervals', path: params.recal_interval_wes, kind: 'interval_list']
+    }
+    if (human) {
+        resources << [label: 'SAGE hotspots',            path: params.SAGE_hotspots,            kind: 'vcf', severity: 'warn']
+        resources << [label: 'SAGE panel BED',           path: params.SAGE_panel_bed,           kind: 'bed', severity: 'warn']
+        resources << [label: 'SAGE high-confidence BED', path: params.SAGE_high_confidence_bed, kind: 'bed', severity: 'warn']
+        resources << [label: 'Conpair markers',          path: params.conpair_marker,           kind: 'bed']
+    }
+    if ('delly' in tools)
+        resources << [label: 'Delly exclude list', path: params.delly_excl, kind: 'bed', severity: 'warn', allowUnknown: true]
+
+    def check = ReferenceCheck.run(params.ref_fai, resources)
+    check.warnings.each { log.warn "Custom reference check: ${it}" }
+    if (check.errors) {
+        error "ERROR: custom reference ${params.ref} is not compatible with the packaged resources for genome '${params.genome}':\n  - " +
+              check.errors.join('\n  - ') +
+              "\nProvide resources built for this reference through the matching --<resource> options, or use the packaged reference."
+    }
+    log.info "Custom reference check: ${resources.count { it.path }} packaged resources checked against ${params.ref}, ${check.warnings.size()} warning(s)"
+}
 
 // Define which tools are available for the selected genome
 def available_tools = params.genomes[params.genome].tools
@@ -658,13 +697,11 @@ params.delly_env = "$projectDir/yml/delly.yml"
 params.ascat_env = "$projectDir/yml/ascat.yml"
 params.alleleCounter_env = "$projectDir/yml/alleleCounter.yml"
 params.manta_env = "$projectDir/yml/manta.yml"
-params.dkfz_env = "$projectDir/yml/dkfz.yml"
 params.SAGE_java_env = "$projectDir/yml/sage_java.yml"
 params.muse_env = "$projectDir/yml/muse.yml"
 params.picard_merge_env = "$projectDir/yml/picard.yml"
 params.gatk_env = "${projectDir}/yml/gatk_runtime.yml"
 params.POST_env = "${projectDir}/yml/POST.yml"
-params.POST_rename_env = "${projectDir}/yml/POST_rename.yml"
 params.gatk = "${params.database_path}/gatk-4.6.2.0/gatk"
 // >>> umi
 params.umi_dir = "${params.results_dir}/UMI"
@@ -845,16 +882,6 @@ include { MULTIQC } from './Modules/MULTIQC/MULTIQC'
 include { PURECN_WF } from './Modules/PURECN/PURECN_WF'
 // <<< purecn
 
-include { POST } from './Modules/POST.nf'
-include { POST_rename } from './Modules/POST_rename.nf'
-include { POST_scenario1 } from './Modules/POST_scenario1.nf'
-include { POST_scenario2 } from './Modules/POST_scenario2.nf'
-// Clinical copies of POST scenarios 3-6 and MERGE_HEADER (originals kept unchanged in Modules/; --post_original_scripts)
-include { POST_scenario3 } from './Modules/POST_clinical/POST_scenario3.nf'
-include { POST_scenario4 } from './Modules/POST_clinical/POST_scenario4.nf'
-include { POST_scenario5 } from './Modules/POST_clinical/POST_scenario5.nf'
-include { POST_scenario6 } from './Modules/POST_clinical/POST_scenario6.nf'
-include { MERGE_HEADER } from './Modules/POST_clinical/MERGE_HEADER.nf'
 // >>> tmb
 include { TMB } from './Modules/TMB/TMB.nf'
 // <<< tmb
@@ -863,6 +890,8 @@ include { VEP_ANNOTATE } from './Modules/VEP/VEP_ANNOTATE.nf'
 include { VCF2MAF } from './Modules/VEP/VCF2MAF.nf'
 include { VEP_COHORT_MAF } from './Modules/VEP/VEP_COHORT_MAF.nf'
 // <<< vep
+include { POST_SCENARIOS } from './Modules/POST_scenarios.nf'
+include { POST_FINAL_VCF } from './Modules/POST_clinical/POST_FINAL_VCF.nf'
 include { ALLELECOUNTER } from './Modules/ALLELECOUNTER.nf'
 
 include { SAVE_CSV_FASTQC } from './Modules/SAVE_CSV/SAVE_CSV_FASTQC'
@@ -1102,11 +1131,16 @@ params.pcgr_tumor_sites = pcgrSites
 
 // Define a workflow completion handler
 workflow.onComplete {
+    def ignored = workflow.stats.ignoredCount
+    def status  = !workflow.success ? 'FAILED'
+                : ignored > 0       ? "COMPLETED WITH ${ignored} IGNORED TASK FAILURE(S) - outputs missing, see .nextflow.log"
+                :                     'SUCCESS'
     def completionStatus = """
 ==============================================
 Pipeline Execution Completed
 ==============================================
-Status        : ${workflow.success ? 'SUCCESS' : 'FAILED'}
+Status        : ${status}
+Tasks         : ${workflow.stats.succeedCount} succeeded, ${workflow.stats.failedCount} failed, ${ignored} ignored
 Completed at  : ${workflow.complete}
 Duration      : ${workflow.duration}
 Success       : ${workflow.success}
@@ -1127,11 +1161,46 @@ def isToolSelected(String tool) {
     return false
 }
 
+def validatePairing(sheet) {
+    def sampleFile = file(sheet)
+    if (!sampleFile.exists()) error "ERROR: Sample sheet file '${sheet}' does not exist"
+    def header = sampleFile.readLines()[0].split(',')*.trim()
+    if (!['patient', 'sample', 'status'].every { it in header }) return      // reported by the per-step column check
+    def rows = sampleFile.splitCsv(header: true)
+    def problems = []
+    rows.groupBy { [it.patient?.trim(), it.sample?.trim(), it.status?.trim()] }.each { k, v ->
+        if (v.size() > 1) problems << "patient ${k[0]}, sample ${k[1]}, status ${k[2]}: listed ${v.size()} times"
+    }
+    rows.groupBy { it.patient?.trim() }.each { patient, prows ->
+        def status  = prows.collect { it.status?.trim() }
+        def unknown = status.findAll { !(it in ['tumor', 'normal']) }.unique()
+        if (unknown)                  problems << "patient ${patient}: status must be 'tumor' or 'normal' (got: ${unknown.join(', ')})"
+        def nNormal = status.count('normal'), nTumor = status.count('tumor')
+        // Clinical: 0 normals = tumour-only patient, 0 tumours = normal-only pool row (both handled downstream);
+        // more than one normal stays ambiguous.
+        if (nNormal > 1)              problems << "patient ${patient}: ${nNormal} normal sample(s), at most 1 is allowed"
+    }
+    if (problems) {
+        error "ERROR: tumor/normal pairing of sample sheet ${sheet} is ambiguous:\n  - " + problems.join('\n  - ') +
+              "\nEach patient has at most one row with status 'normal'; tumour-only and normal-only patients are allowed."
+    }
+    def byPatient = rows.groupBy { it.patient?.trim() }
+    def nPairs = byPatient.count { p, r -> r*.status*.trim().contains('normal') && r*.status*.trim().contains('tumor') }
+    log.info "Sample sheet ${sheet}: ${nPairs} paired patient(s), " +
+             "${byPatient.count { p, r -> !r*.status*.trim().contains('normal') }} tumour-only, " +
+             "${byPatient.count { p, r -> !r*.status*.trim().contains('tumor') }} normal-only"
+}
+
 
 workflow {
+    validatePairing(params.sample)
     chunk = Channel.of(1..20)
 
-    // Mutect2/GetPileupSummaries shards: over --targets when given, else whole chromosomes of a custom ref,
+    // BAMs removed by samtools quickcheck (CHECK_BAM_BWA / CHECK_BAM_MKDUP), as
+    // tuple(patient, meta, stage). Used by the pair filter after CHECK_BAM_RECAL.
+    qc_failed = Channel.empty()
+
+        // Mutect2/GetPileupSummaries shards: over --targets when given, else whole chromosomes of a custom ref,
     // else the database's prebuilt shards. Strelka call regions: padded targets, else the callable-regions --bed.
     if (params.targets) {
         PREPARE_TARGETS(file(params.targets_clean), file(params.ref_fai))
@@ -1198,21 +1267,13 @@ workflow {
             exit 1
         }
 
-        if (params.tool && params.tool.contains('ascat')) {
-            Channel.fromPath(params.sample)
-            | splitCsv(header:true)
-            | map { row ->
-                meta = row.subMap('patient', 'sample', 'status', 'fastq_1', 'fastq_2', 'sex')
-                return meta
-            } | set { sample_sheet }
-        } else {
-            Channel.fromPath(params.sample)
-            | splitCsv(header:true)
-            | map { row ->
-                meta = row.subMap('patient', 'sample', 'status', 'fastq_1', 'fastq_2')
-                return meta
-            } | set { sample_sheet }
-        }
+        Channel.fromPath(params.sample)
+        | splitCsv(header:true)
+        | map { row ->
+            def keys = ['patient', 'sample', 'status'] + (isToolSelected('ascat') ? ['sex'] : [])
+            def meta = row.subMap(keys)
+            [meta, file(row.fastq_1, checkIfExists: true), file(row.fastq_2, checkIfExists: true)]
+        } | set { sample_sheet }
         FASTQC(sample_sheet)
         // >>> umi
         // FASTQ -> uBAM (UMI in RX) -> bwa-mem2 + ZipperBams -> GroupReadsByUmi -> consensus -> re-align +
@@ -1243,6 +1304,30 @@ workflow {
         BWA_MEM(sample_sheet).set { BWA_MEM_out }
         CHECK_BAM_BWA(BWA_MEM_out.bam).set{ CHECK_BAM_BWA_out }
         COMBINE_REPORTS_BWA(CHECK_BAM_BWA_out.individual_reports_bwa.collect())
+
+        // Number of BAMs per patient in the sample sheet (used by the pair filter)
+        sample_sheet
+            .map { meta, fq1, fq2 -> meta.patient }
+            .toList()
+            .map { patients -> patients.countBy { it } }
+            .set { bams_per_patient }
+
+        // Only BAMs that pass quickcheck go on to MarkDuplicates
+        CHECK_BAM_BWA_out.checked
+            .branch { meta, bam, qc ->
+                pass: qc == 'PASS'
+                fail: true
+            }
+            .set { bwa_qc }
+        bwa_qc.pass
+            .map { meta, bam, qc -> tuple(meta, bam) }
+            .set { BWA_MEM_good }
+        qc_failed = qc_failed.mix(
+            bwa_qc.fail.map { meta, bam, qc ->
+                log.warn "quickcheck FAIL after BWA: removing ${meta.patient}_${meta.sample}_${meta.status} (${bam.name})"
+                tuple(meta.patient, meta, 'BWA')
+            }
+        )
     }
 
     // starts from markduplicate
@@ -1287,18 +1372,22 @@ workflow {
                     return [meta, file(row.bam), file(row.bai)]
                 } | set { sample_sheet }
             }
+            sample_sheet
+                .map { meta, bam, bai -> meta.patient }
+                .toList()
+                .map { patients -> patients.countBy { it } }
+                .set { bams_per_patient }
+
             RENAME_BAM_HEADER(sample_sheet)
             MKDUP(RENAME_BAM_HEADER.out.renamed_bam).set{ MKDUP_out }    
             if (params.cleanup) {
                 CLEANUP_BWA(MKDUP.out.cleanup_trigger)
             }
         } else {
-            MKDUP(BWA_MEM_out).set{ MKDUP_out }
+            MKDUP(BWA_MEM_good).set{ MKDUP_out }
             if (params.cleanup) {
                 CLEANUP_BWA(MKDUP.out.cleanup_trigger)
             }            
-            CHECK_BAM_MKDUP(MKDUP_out.mkdup_bam).set{ CHECK_BAM_MKDUP_out }
-            COMBINE_REPORTS_MKDUP(CHECK_BAM_MKDUP_out.individual_reports_mkdup.collect())
         }
         // >>> umi
         if (params.umi) {
@@ -1306,15 +1395,36 @@ workflow {
         }
         // <<< umi
 
+        CHECK_BAM_MKDUP(MKDUP_out.mkdup_bam).set{ CHECK_BAM_MKDUP_out }
+        COMBINE_REPORTS_MKDUP(CHECK_BAM_MKDUP_out.individual_reports_mkdup.collect())
+
+        // Only BAMs that pass quickcheck go on to recalibration.
+        // MKDUP_good has the same shape as MKDUP's pair_mutect output: tuple(patient, meta, bam, bai)
+        CHECK_BAM_MKDUP_out.checked
+            .branch { meta, bam, bai, qc ->
+                pass: qc == 'PASS'
+                fail: true
+            }
+            .set { mkdup_qc }
+        mkdup_qc.pass
+            .map { meta, bam, bai, qc -> tuple(meta.patient, meta, bam, bai) }
+            .set { MKDUP_good }
+        qc_failed = qc_failed.mix(
+            mkdup_qc.fail.map { meta, bam, bai, qc ->
+                log.warn "quickcheck FAIL after MarkDuplicates: removing ${meta.patient}_${meta.sample}_${meta.status} (${bam.name})"
+                tuple(meta.patient, meta, 'MKDUP')
+            }
+        )
+
         if (params.genome in ['mm39', 'RN7']){
-            MKDUP_out.pair_mutect.filter{it[1].status == 'normal'}.set{normal}
-            MKDUP_out.pair_mutect.filter{it[1].status == 'tumor'}.set{tumor}
+            MKDUP_good.filter{it[1].status == 'normal'}.set{normal}
+            MKDUP_good.filter{it[1].status == 'tumor'}.set{tumor}
             normal.cross(tumor){it[0]}.map{
                 normal, tumor ->
                 [patient:normal[0], normal:normal[2], tumor:tumor[2], tumor_meta:tumor[1], normal_meta:normal[1]]
             }.set{ RECALIBRATE_out_MAP }
 
-            RECALIBRATE_out = [pair_recal: MKDUP_out.pair_mutect]
+            RECALIBRATE_out = [pair_recal: MKDUP_good]
         }
     }
 
@@ -1361,6 +1471,12 @@ workflow {
                 } | set { sample_sheet_raw }
             }
 
+            sample_sheet_raw
+                .map { meta, bam, bai -> meta.patient }
+                .toList()
+                .map { patients -> patients.countBy { it } }
+                .set { bams_per_patient }
+
             // Rename BAM headers to standardized format
             RENAME_BAM_HEADER(sample_sheet_raw)
 
@@ -1391,7 +1507,12 @@ workflow {
 
                 RECALIBRATE_MergeBam(BaseRecal_BQSR_out_MAP).set{ RECALIBRATE_MergeBam_out }
 
-                RECALIBRATE_SortBam(RECALIBRATE_MergeBam_out.MergeBam_input).set{ RECALIBRATE_out }
+                RECALIBRATE_MergeBam_out.MergeBam_input
+                    .map { patient, meta, merged -> [[patient, meta.sample, meta.status], patient, meta, merged] }
+                    .join( RECALIBRATE_MergeReport_out.BQSR_input.map { patient, meta, bam, table, bai -> [[patient, meta.sample, meta.status], bam, bai] }, failOnMismatch: true )
+                    .map { key, patient, meta, merged, mkdup_bam, mkdup_bai -> [patient, meta, merged, mkdup_bam, mkdup_bai] }
+                    .set { SortBam_input }
+                RECALIBRATE_SortBam(SortBam_input).set{ RECALIBRATE_out }
 
                 if (params.cleanup) {
                     CLEANUP_MKDUP_RECAL(RECALIBRATE_out.cleanup_trigger)
@@ -1399,10 +1520,10 @@ workflow {
             }
         } else {
             if (params.targeted && params.genome in ['GRCh38', 'GRCh37']) {
-                RECALIBRATE_BaseRecal_exome(MKDUP_out.pair_mutect).set{ RECALIBRATE_BaseRecal_out }
+                RECALIBRATE_BaseRecal_exome(MKDUP_good).set{ RECALIBRATE_BaseRecal_out }
                 RECALIBRATE_BQSR_exome(RECALIBRATE_BaseRecal_out.BQSR_input).set { RECALIBRATE_out }
             } else if (params.type == "genome" && params.genome in ['GRCh38', 'GRCh37']) {
-                RECALIBRATE_BaseRecal(MKDUP_out.pair_mutect, chunk, interval_dir_ch).set{ RECALIBRATE_BaseRecal_out }
+                RECALIBRATE_BaseRecal(MKDUP_good, chunk, interval_dir_ch).set{ RECALIBRATE_BaseRecal_out }
 
                 RECALIBRATE_BaseRecal_out.MergeReport_input.groupTuple(by:[0,1]).set { BaseRecal_out_pair }
                 BaseRecal_out_pair.map{
@@ -1420,7 +1541,12 @@ workflow {
 
                 RECALIBRATE_MergeBam(BaseRecal_BQSR_out_MAP).set{ RECALIBRATE_MergeBam_out }
 
-                RECALIBRATE_SortBam(RECALIBRATE_MergeBam_out.MergeBam_input).set{ RECALIBRATE_out }
+                RECALIBRATE_MergeBam_out.MergeBam_input
+                    .map { patient, meta, merged -> [[patient, meta.sample, meta.status], patient, meta, merged] }
+                    .join( RECALIBRATE_MergeReport_out.BQSR_input.map { patient, meta, bam, table, bai -> [[patient, meta.sample, meta.status], bam, bai] }, failOnMismatch: true )
+                    .map { key, patient, meta, merged, mkdup_bam, mkdup_bai -> [patient, meta, merged, mkdup_bam, mkdup_bai] }
+                    .set { SortBam_input }
+                RECALIBRATE_SortBam(SortBam_input).set{ RECALIBRATE_out }
 
                 if (params.cleanup) {
                     CLEANUP_MKDUP_RECAL(RECALIBRATE_out.cleanup_trigger)
@@ -1429,6 +1555,36 @@ workflow {
         }
         CHECK_BAM_RECAL(RECALIBRATE_out.pair_recal).set{ CHECK_BAM_RECAL_out }
         COMBINE_REPORTS_RECAL(CHECK_BAM_RECAL_out.individual_reports_recal.collect())
+
+        // Pair filter: keep only BAMs that passed every quickcheck, and only for
+        // patients that still have at least one normal and one tumor BAM.
+        // Every BAM in the sample sheet ends here exactly once, either as a
+        // recalibrated BAM or as a quickcheck failure from an earlier step, so each
+        // patient is released as soon as all of its own BAMs are accounted for.
+        CHECK_BAM_RECAL_out.checked
+            .map { patient, meta, bam, bai, qc ->
+                if (qc != 'PASS') {
+                    log.warn "quickcheck FAIL after recalibration: removing ${meta.patient}_${meta.sample}_${meta.status} (${bam.name})"
+                }
+                tuple(patient, meta, qc == 'PASS' ? [bam, bai] : null, qc == 'PASS' ? 'PASS' : 'RECAL')
+            }
+            .mix(qc_failed.map { patient, meta, stage -> tuple(patient, meta, null, stage) })
+            .combine(bams_per_patient)
+            .map { patient, meta, files, stage, counts -> tuple(groupKey(patient, counts[patient]), meta, files, stage) }
+            .groupTuple()
+            .flatMap { patient, metas, files, stages ->
+                def rows = [metas, files, stages].transpose()
+                def good = rows.findAll { m, f, s -> s == 'PASS' }
+                def has_normal = good.any { m, f, s -> m.status == 'normal' }
+                def has_tumor  = good.any { m, f, s -> m.status == 'tumor' }
+                if (!(has_normal && has_tumor)) {
+                    def missing = [has_normal ? null : 'normal', has_tumor ? null : 'tumor'].findAll()
+                    log.warn "Skipping patient ${patient}: no passing ${missing.join(' or ')} BAM"
+                    return []
+                }
+                good.collect { m, f, s -> tuple(m.patient, m, f[0], f[1]) }
+            }
+            .set { RECAL_good }
     }
 
     // starts from variant calling
@@ -1599,34 +1755,9 @@ workflow {
                     ASCAT_allelecount(RECALIBRATE_out_MAP_CN, chromosomes)
 
                     ASCAT_allelecount.out.allelecount
-                        .map { map, chr, file ->
-                            def patient = map.patient
-                            def sample = map.sample
-                            def gender = map.gender
-                            [patient, sample, gender, file]
-                        }
-                        .groupTuple(by: [0, 1, 2])  // Group by patient, sample, and gender
-                        // Restructure from pairs to separate normal and tumor lists
-                        .map { patient, sample, gender, files ->
-                            // Extract normal and tumor files from the nested structure
-                            def normalFiles = []
-                            def tumorFiles = []
-
-                            // Flatten any nested structure if present
-                            def flatFiles = files.flatten()
-
-                            // Separate normal and tumor files
-                            flatFiles.each { file ->
-                                if (file.toString().contains("_normal_")) {
-                                    normalFiles << file
-                                } else if (file.toString().contains("_tumor_")) {
-                                    tumorFiles << file
-                                }
-                            }
-
-                            [patient, sample, gender, normalFiles, tumorFiles]
-                        }
-                        .set { ascat_logrbaf_input }
+                    .map { map, chr, tumor_file, normal_file -> [map.patient, map.sample, map.gender, normal_file, tumor_file] }
+                    .groupTuple(by: [0, 1, 2])   // -> [patient, sample, gender, normalFiles, tumorFiles]
+                    .set { ascat_logrbaf_input }
 
                     ASCAT_logrbaf(ascat_logrbaf_input)
                     ASCAT_exome(ASCAT_logrbaf.out.ascat_input)
@@ -1701,8 +1832,8 @@ workflow {
 
         } else {
 
-            RECALIBRATE_out.pair_recal.filter{it[1].status == 'normal'}.set{normal}
-            RECALIBRATE_out.pair_recal.filter{it[1].status == 'tumor'}.set{tumor}
+            RECAL_good.filter{it[1].status == 'normal'}.set{normal}
+            RECAL_good.filter{it[1].status == 'tumor'}.set{tumor}
             normal.cross(tumor){it[0]}.map{
                 normal, tumor ->
                 [patient:normal[0], normal:normal[2], tumor:tumor[2], tumor_meta:tumor[1], normal_meta:normal[1]]
@@ -1738,7 +1869,7 @@ workflow {
                 MOSDEPTH(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
             }
 
-            GETpileUP(RECALIBRATE_out.pair_recal, chunk, interval_dir_ch).set { GETpileUP_out }
+            GETpileUP(RECAL_good, chunk, interval_dir_ch).set { GETpileUP_out }
             // >>> mutect2_pon (was: MUTECT2_CALLING(..., chunk, interval_dir_ch))
             if (params.mutect2_cohort_pon == 'build') {
                 mutect2_pon_ch = MUTECT2_COHORT_PON(normal, chunk, interval_dir_ch,
@@ -1817,43 +1948,18 @@ workflow {
 	        if (params.targeted) {
 	            ASCAT_allelecount(RECALIBRATE_out_MAP_CN, chromosomes)
 	
-	            ASCAT_allelecount.out.allelecount
-	                .map { map, chr, file ->
-	                    def patient = map.patient
-	                    def sample = map.sample
-	                    def gender = map.gender
-	                    [patient, sample, gender, file]
-	                }
-	                .groupTuple(by: [0, 1, 2])  // Group by patient, sample, and gender
-	                // Restructure from pairs to separate normal and tumor lists
-	                .map { patient, sample, gender, files ->
-	                    // Extract normal and tumor files from the nested structure
-	                    def normalFiles = []
-	                    def tumorFiles = []
-	
-	                    // Flatten any nested structure if present
-	                    def flatFiles = files.flatten()
-	
-	                    // Separate normal and tumor files
-	                    flatFiles.each { file ->
-	                        if (file.toString().contains("_normal_")) {
-	                            normalFiles << file
-	                        } else if (file.toString().contains("_tumor_")) {
-	                            tumorFiles << file
-	                        }
-	                    }
-	
-	                    [patient, sample, gender, normalFiles, tumorFiles]
-	                }
-	                .set { ascat_logrbaf_input }
-	
-	            ASCAT_logrbaf(ascat_logrbaf_input)
-	            ASCAT_exome(ASCAT_logrbaf.out.ascat_input)
-	
-	        } else if (params.type == "genome") {
-	            ASCAT(RECALIBRATE_out_MAP_CN)
-	        }
-	    }
+                ASCAT_allelecount.out.allelecount
+                    .map { map, chr, tumor_file, normal_file -> [map.patient, map.sample, map.gender, normal_file, tumor_file] }
+                    .groupTuple(by: [0, 1, 2])   // -> [patient, sample, gender, normalFiles, tumorFiles]
+                    .set { ascat_logrbaf_input }
+        
+                    ASCAT_logrbaf(ascat_logrbaf_input)
+                    ASCAT_exome(ASCAT_logrbaf.out.ascat_input)
+        
+                } else if (params.type == "genome") {
+                    ASCAT(RECALIBRATE_out_MAP_CN)
+                }
+            }
 	
 	    // CNVkit
 	    if (params.tool && params.tool.contains('cnvkit')) {
@@ -1959,7 +2065,7 @@ workflow {
         // Choose the source based on first_step
         sourceChannel = (params.first_step == "variant_calling") ? 
             sample_sheet : 
-            RECALIBRATE_out.pair_recal
+            RECAL_good
 
         // Create recalChannel from the chosen source
         normal_post = sourceChannel.filter{it[1].status == 'normal'}
@@ -1978,30 +2084,20 @@ workflow {
             .map { patient_sample, mutect2_vcf, muse_vcf, strelka_vcf, sage_vcf, recal_bam ->
                 [patient_sample, mutect2_vcf[1], muse_vcf[1], strelka_vcf[1], strelka_vcf[2], sage_vcf[1], recal_bam[1], recal_bam[2]]
             }
-        
-        // POST(postInput)
-        POST_rename(postInput)
+		
+        POST_SCENARIOS(postInput)
 
-        POST_scenario1(POST_rename.out.renamed_postInput)
-        POST_scenario2(POST_rename.out.renamed_postInput)
-        POST_scenario3(POST_rename.out.renamed_postInput)
-        POST_scenario4(POST_rename.out.renamed_postInput)
-        POST_scenario5(POST_rename.out.renamed_postInput)
-        POST_scenario6(POST_rename.out.renamed_postInput)
-
-        merge_3 = POST_scenario3.out.merge_input.map { file -> tuple(file, 'scenario_3') }
-        merge_4 = POST_scenario4.out.merge_input.map { file -> tuple(file, 'scenario_4') }
-        merge_5 = POST_scenario5.out.merge_input.map { file -> tuple(file, 'scenario_5') }
-        merge_6 = POST_scenario6.out.merge_input.map { file -> tuple(file, 'scenario_6') }
-
-        merge_all = merge_3.mix(merge_4, merge_5, merge_6)
-
-		MERGE_HEADER(merge_all)
-
-        // >>> consensus_status
-        // Clinical edit: a tumour with no consensus mutations is reported, not fatal (scenarioN_clinical.sh).
-        POST_scenario3.out.status.mix(POST_scenario4.out.status, POST_scenario5.out.status, POST_scenario6.out.status)
-            .map { patient_sample, f -> f }
+        // >>> clinical_post
+        // Upstream POST_SCENARIOS (all six scenarios in one task) replaced the old per-scenario scripts and MERGE_HEADER.
+        // Clinical additions on its outputs: sorted/indexed final VCFs with the exact commands in their headers,
+        // the "no consensus mutations" report, and the VEP/PCGR wiring.
+        def post_final = [
+            'scenario_3': POST_SCENARIOS.out.final_vcf_s3, 'scenario_4': POST_SCENARIOS.out.final_vcf_s4,
+            'scenario_5': POST_SCENARIOS.out.final_vcf_s5, 'scenario_6': POST_SCENARIOS.out.final_vcf_s6 ]
+        post_final_all = post_final.collect { sc, ch -> ch.map { ps, vcf -> [ps, sc, vcf] } }
+            .inject { a, b -> a.mix(b) }
+        POST_FINAL_VCF(post_final_all.combine(POST_SCENARIOS.out.provenance, by: 0))
+        POST_FINAL_VCF.out.status
             .collectFile(name: 'consensus_status.tsv', storeDir: "${params.results_dir}/REPORT", keepHeader: true, skip: 1, sort: true)
             .subscribe { f ->
                 def none = f.readLines().drop(1).findAll { it.contains('NO_CONSENSUS_MUTATIONS') }
@@ -2009,10 +2105,10 @@ workflow {
                     log.warn "${none.size()} tumour/scenario row(s) have NO consensus mutations (run continued): REPORT/consensus_status.tsv"
                 }
             }
-        // <<< consensus_status
+        // <<< clinical_post
 
         // >>> vep
-        // VEP + vcf2maf: the paired standard consensus VCF of --vep_scenario and the tumour-only PASS consensus,
+        // VEP + vcf2maf: the paired consensus VCF of --vep_scenario and the tumour-only PASS consensus,
         // one MAF per sample, then MAF/cohort.maf with an Analysis_Mode column.
         if (isToolSelected('vep')) {
             // Sample IDs as the callers name their VCF columns (Mutect2/SAGE): <patient>_<sample>_tumor|_normal
@@ -2021,10 +2117,7 @@ workflow {
                  "${tumor[1].patient}_${tumor[1].sample}_tumor".toString(),
                  "${normal[1].patient}_${normal[1].sample}_normal".toString()]
             }
-            def vep_suffix = "_${params.vep_scenario}_standard_PASSed.vcf".toString()
-            vep_paired = MERGE_HEADER.out.final_standard_vcf
-                .filter { vcf -> vcf.name.endsWith(vep_suffix) }
-                .map { vcf -> [vcf.name.substring(0, vcf.name.length() - vep_suffix.length()), vcf] }
+            vep_paired = post_final[params.vep_scenario]
                 .join(vep_pair_ids)
                 .map { patient_sample, vcf, tumor_id, normal_id -> [patient_sample, 'paired', tumor_id, normal_id, vcf] }
             vep_tumor_only = POST_TUMOR_ONLY.out.consensus_pass
@@ -2035,23 +2128,16 @@ workflow {
         }
         // <<< vep
         // >>> pcgr
-        // PCGR on every tumour's consensus: pairs from the chosen scenario's standard VCF (+ the caller VCFs whose
-        // FORMAT fields give tumour/normal depth and AF), tumour-only from POST_TUMOR_ONLY's PASS VCF. This block is
-        // shared by all entry points (mapping, markdup, recalibration, variant_calling).
+        // PCGR on every tumour's consensus: pairs from the chosen scenario's final VCF (+ the caller VCFs whose
+        // FORMAT fields give tumour/normal depth and AF), tumour-only from POST_TUMOR_ONLY's PASS VCF.
         if (isToolSelected('pcgr')) {
             def pcgrNone = file("${projectDir}/Modules/PCGR/assets/NO_FILE")
-            def pcgrSuffix = "_scenario_${params.pcgr_scenario}_standard_PASSed.vcf"
-            pcgr_paired = MERGE_HEADER.out.final_standard_vcf
-                .filter { vcf -> vcf.name.endsWith(pcgrSuffix) }
-                .map { vcf -> [vcf.name - pcgrSuffix, vcf] }
-                .join(POST_rename.out.renamed_postInput
-                    .map { ps, m2, muse, st_snv, st_indel, sage, bam, bai -> [ps, m2, sage, st_snv, st_indel] })
+            pcgr_paired = post_final["scenario_${params.pcgr_scenario}".toString()]
+                .join(postInput.map { ps, m2, muse, st_snv, st_indel, sage, bam, bai -> [ps, m2, sage, st_snv, st_indel] })
                 .map { ps, vcf, m2, sage, st_snv, st_indel -> [ps, 'paired', vcf, m2, sage, st_snv, st_indel] }
             pcgr_tonly = POST_TUMOR_ONLY.out.consensus_pass
                 .map { ps, vcf, tbi -> [ps, 'tumor_only', vcf, pcgrNone, pcgrNone, pcgrNone, pcgrNone] }
-            // HOOK (PureCN, --pcgr_cna_from_purecn): replace Channel.empty() with the PureCN allele-specific segments
-            // keyed like the VCFs, e.g. PURECN.out.loh.map { map, loh_csv -> ["${map.patient}_${map.tumor_meta.sample}", loh_csv] }
-            // (PureCN <sample>_loh.csv: chr,start,end,C,M; converted by Modules/PCGR/purecn_to_pcgr_cna.py).
+            // HOOK (PureCN, --pcgr_cna_from_purecn): replace Channel.empty() with the PureCN allele-specific segments.
             pcgr_cna = Channel.empty()
             if (params.pcgr_cna_from_purecn) {
                 log.warn "--pcgr_cna_from_purecn: PureCN is not wired on this branch yet; PCGR runs without CNA input."
@@ -2067,13 +2153,11 @@ workflow {
             PCGR(pcgr_input)
         }
         // <<< pcgr
-
-		
-
+        
         // AlleleCounter for VAF calculation
         def vaf_source = (params.first_step == "variant_calling") ? 
             RENAME_BAM_HEADER.out.renamed_bam.map { meta, bam, bai -> [meta.patient, meta, bam, bai] } :
-            RECALIBRATE_out.pair_recal
+            RECAL_good
 
         vaf_source.filter{it[1].status == 'normal'}.set{normal_vaf}
         vaf_source.filter{it[1].status == 'tumor'}.set{tumor_vaf}
@@ -2090,7 +2174,7 @@ workflow {
             }
             .set { recal_map_keyed }
 
-        POST_scenario4.out.final_vcf
+        POST_SCENARIOS.out.final_vcf_s4
             .filter { ps, vcf -> vcf.readLines().any { !it.startsWith('#') } }  // clinical: skip AlleleCounter for an empty consensus (it segfaults); see REPORT/consensus_status.tsv
             .join(recal_map_keyed)
             .map { patient_sample, vcf_file, recal_map -> 
@@ -2106,7 +2190,7 @@ workflow {
             .set { allelecounter_input_4 }
 
 
-        POST_scenario5.out.final_vcf
+        POST_SCENARIOS.out.final_vcf_s5
             .filter { ps, vcf -> vcf.readLines().any { !it.startsWith('#') } }  // clinical: skip AlleleCounter for an empty consensus (it segfaults); see REPORT/consensus_status.tsv
             .join(recal_map_keyed)
             .map { patient_sample, vcf_file, recal_map -> 
@@ -2121,7 +2205,7 @@ workflow {
             }
             .set { allelecounter_input_5 }
 
-        POST_scenario6.out.final_vcf
+        POST_SCENARIOS.out.final_vcf_s6
             .filter { ps, vcf -> vcf.readLines().any { !it.startsWith('#') } }  // clinical: skip AlleleCounter for an empty consensus (it segfaults); see REPORT/consensus_status.tsv
             .join(recal_map_keyed)
             .map { patient_sample, vcf_file, recal_map -> 
@@ -2151,9 +2235,9 @@ workflow {
         if (params.tool && isToolSelected('tmb')) {
             def tmbScenario = params.tmb_scenario.toString()
             def tmbPairedVcf = [
-                '4': POST_scenario4.out.final_vcf,
-                '5': POST_scenario5.out.final_vcf,
-                '6': POST_scenario6.out.final_vcf
+                '4': POST_SCENARIOS.out.final_vcf_s4,
+                '5': POST_SCENARIOS.out.final_vcf_s5,
+                '6': POST_SCENARIOS.out.final_vcf_s6
             ][tmbScenario]
             // HOOK (annotation branch): to count coding-only on an annotated VCF, replace tmbPairedVcf /
             // tmbTumorOnlyVcf with channels of [patient_sample, annotated_vcf] (CSQ or ANN in the header).
@@ -2239,7 +2323,7 @@ workflow {
         }
         if (humanGenome) {
             mqc_files = mqc_files.mix(MOSDEPTH.out.coverage.map { it[1] }.flatten())
-            BCFTOOLS_STATS(MERGE_HEADER.out.fixed_standard_vcf.map { it[0] }.mix(POST_TUMOR_ONLY.out.consensus_pass.map { it[1] }))
+            BCFTOOLS_STATS(POST_FINAL_VCF.out.vcf.map { it[2] }.mix(POST_TUMOR_ONLY.out.consensus_pass.map { it[1] }))
             mqc_files = mqc_files.mix(BCFTOOLS_STATS.out.stats)
         }
         MULTIQC(mqc_files.collect())
