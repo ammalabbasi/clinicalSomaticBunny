@@ -267,6 +267,7 @@ Vendor deliveries (e.g. Tempus, CARIS) are usually processed BAMs from targeted 
 | `--targets <bed>` | | Capture BED (plain or `.gz`), same contig names as `--ref`. Padded, merged and used for: Mutect2/GetPileupSummaries shards (instead of whole chromosomes), Strelka `--callRegions`, mosdepth and CNVkit targets, BQSR intervals. Also accepted with `--type exome` |
 | `--target_padding` | `100` | bp added on each side of every target |
 | `--contig_rename` | `auto` | Rename BAM contigs between b37 and `chr` style (`1`↔`chr1`, `MT`↔`chrM`) when the other name exists in `--ref` with the same length. `none` turns this off. Either way the run stops early, with a readable message, if the BAM's primary chromosomes do not match `--ref` |
+| `--cnvkit_reference` | `auto` | `pooled`: CNVkit reference built from the run's normals. `flat`: no normals needed; every bin gets the same expected coverage, with GC and repeat corrections but no per-bait capture correction, so large CNAs stay visible and small ones are unreliable. `auto` uses pooled when the sheet has normals and flat when it has none |
 | `--outdir <dir>` | `<pipeline>/RESULTS` | Where `RESULTS`, `REPORT` and `pipeline.log` go. Use a protected location for patient data, so results are not written inside the code checkout |
 
 **Tumour-only samples.** A patient with a tumour row and no normal row is no longer dropped. With `--first_step variant_calling`:

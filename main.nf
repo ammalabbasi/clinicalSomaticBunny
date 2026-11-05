@@ -16,6 +16,7 @@ params.outdir = null              // results root; default $projectDir/RESULTS (
 params.targets = null             // capture BED for --type exome|panel: Mutect2 shards, Strelka regions, mosdepth, CNVkit, BQSR
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
+params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
@@ -208,6 +209,9 @@ if (params.type == 'panel') {
 }
 if (!(params.contig_rename in ['auto', 'none'])) {
     error "--contig_rename must be auto or none."
+}
+if (!(params.cnvkit_reference in ['auto', 'pooled', 'flat'])) {
+    error "--cnvkit_reference must be auto, pooled or flat."
 }
 
 // Check if user inputs custom ref or not
@@ -432,6 +436,7 @@ include { MuSE } from './Modules/MuSE'
 
 include { CNVkit_buildcnn } from './Modules/CNVkit_buildcnn'
 include { CNVkit } from './Modules/CNVkit'
+include { CNVkit_flatref } from './Modules/CNVkit_flatref'
 
 include { Create_sample_tsv } from './Modules/Delly/Create_sample_tsv'
 include { Delly_SVcalling } from './Modules/Delly/Delly_SVcalling'
@@ -488,6 +493,7 @@ include { SAVE_CSV_MOSDEPTH } from './Modules/SAVE_CSV/SAVE_CSV_MOSDEPTH'
 // normal.cross(tumor); now they are called tumour-only (--first_step variant_calling) or the run stops.
 def sheetFile = file(params.sample)
 def tumorOnlyPatients = [] as Set
+def cnvkitRefMode = (params.cnvkit_reference == 'flat') ? 'flat' : 'pooled'
 if (sheetFile.exists()) {
     def lines = sheetFile.readLines().findAll { it.trim() }
     def header = lines[0].split(',').collect { it.trim() }
@@ -534,13 +540,29 @@ if (sheetFile.exists()) {
         error "Sample sheet ${params.sample}:\n  " + problems.join('\n  ')
     }
     tumorOnlyPatients = (tumors.keySet() - normals.keySet()) as Set
-    // CNVkit builds its reference from the pooled normals; with none, collect() emits nothing and CNVkit
-    // would silently never run.
-    if (params.tool.toString().split(',').collect { it.trim() }.contains('cnvkit') && normals.isEmpty()) {
-        error "--tool cnvkit needs at least one normal row in the sample sheet (its reference is built from the pooled normals)."
+    def selectedTools = params.tool ? params.tool.toString().split(',').collect { it.trim() } : []
+    // CNVkit reference: pooled from the run's normals, or flat (no normals). auto picks pooled when the sheet has
+    // normals. A pooled reference with no normals would never be built (collect() on an empty channel emits
+    // nothing) and CNVkit would silently not run, so that combination stops here.
+    if (selectedTools.contains('cnvkit')) {
+        if (params.cnvkit_reference == 'pooled' && normals.isEmpty()) {
+            error "--cnvkit_reference pooled needs at least one normal row in the sample sheet. " +
+                  "Use --cnvkit_reference flat (or auto) for a cohort without normals."
+        }
+        cnvkitRefMode = (params.cnvkit_reference == 'auto') ? (normals.isEmpty() ? 'flat' : 'pooled') : params.cnvkit_reference
+        if (cnvkitRefMode == 'flat') {
+            log.warn "CNVkit uses a FLAT reference (no normals): GC/repeat corrected but no per-bait capture correction. " +
+                     "Large CNAs stay visible; small or low-amplitude calls are unreliable. Do not pool with pooled-reference results."
+        }
     }
     def nPaired = tumors.keySet().intersect(normals.keySet()).size()
     log.info "Sample sheet: ${nPaired} patient(s) with a matched normal, ${tumorOnlyPatients.size()} tumour-only"
+    // Tools that only run on tumour-normal pairs get no input when no patient is paired; say so instead of
+    // finishing "successfully" without them.
+    def pairOnly = selectedTools.findAll { it in ['manta', 'ascat', 'delly'] }
+    if (nPaired == 0 && pairOnly) {
+        log.warn "--tool ${pairOnly.join(',')} will not run: no patient has a matched normal, and these tools need one."
+    }
     if (tumorOnlyPatients && params.first_step != 'variant_calling') {
         error "${tumorOnlyPatients.size()} patient(s) have a tumour but no normal. Tumour-only calling is supported with " +
               "--first_step variant_calling (processed BAMs); run those samples separately."
@@ -554,6 +576,7 @@ if (sheetFile.exists()) {
     }
 }
 params.tumor_only_patients = tumorOnlyPatients
+params.cnvkit_ref_mode = cnvkitRefMode
 
 // Define a workflow completion handler
 workflow.onComplete {
@@ -1054,8 +1077,12 @@ workflow {
 
             // CNVkit
             if (params.tool && params.tool.contains('cnvkit')) {
-                CNVkit_buildcnn(normal_bams).set { CNVkit_buildcnn_out }
-                CNVkit(RECALIBRATE_out_MAP_CN.mix(TUMOR_ONLY_MAP_CN), CNVkit_buildcnn_out.CNVkit_ref_cnn).set { CNVkit_out }
+                if (params.cnvkit_ref_mode == 'flat') {
+                    cnvkit_ref_ch = CNVkit_flatref(Channel.value('flat')).CNVkit_ref_cnn
+                } else {
+                    cnvkit_ref_ch = CNVkit_buildcnn(normal_bams).CNVkit_ref_cnn
+                }
+                CNVkit(RECALIBRATE_out_MAP_CN.mix(TUMOR_ONLY_MAP_CN), cnvkit_ref_ch).set { CNVkit_out }
             }
 
             // Delly
@@ -1225,8 +1252,12 @@ workflow {
 	
 	    // CNVkit
 	    if (params.tool && params.tool.contains('cnvkit')) {
-	        CNVkit_buildcnn(normal_bams).set { CNVkit_buildcnn_out }
-	        CNVkit(RECALIBRATE_out_MAP_CN, CNVkit_buildcnn_out.CNVkit_ref_cnn).set { CNVkit_out }
+	        if (params.cnvkit_ref_mode == 'flat') {
+	            cnvkit_ref_ch = CNVkit_flatref(Channel.value('flat')).CNVkit_ref_cnn
+	        } else {
+	            cnvkit_ref_ch = CNVkit_buildcnn(normal_bams).CNVkit_ref_cnn
+	        }
+	        CNVkit(RECALIBRATE_out_MAP_CN, cnvkit_ref_ch).set { CNVkit_out }
 	    }
 	
 	    // Delly
