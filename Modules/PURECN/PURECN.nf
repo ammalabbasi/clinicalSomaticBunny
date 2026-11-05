@@ -5,7 +5,12 @@ nextflow.enable.dsl=2
 //   coverage normalisation: the normal DB (tangent normal) when there is one. A paired tumour's matched-normal coverage
 //   is used instead only with --purecn_matched_normal_coverage, or when the run has no normal DB (one normal only):
 //   PureCN.R warns that --normal overrides the DB's denoising, so the DB is the default.
-//   purity search: [--purecn_min_purity, --purecn_max_purity], or the sheet's `purity` +- --purecn_purity_window.
+//   purity search: always [--purecn_min_purity, --purecn_max_purity]. A sheet `purity` does NOT bound the search:
+//   bounding it (0.40-0.70 around 0.55) sent PureCN to a doubled-ploidy solution on the synthetic test although the
+//   true purity (0.60) was inside the bounds. Instead resources/purecn_select.R picks, among PureCN's ranked solutions,
+//   the most likely one within sheet purity +- --purecn_purity_window. If that is not rank 1, it writes PureCN's
+//   curation file and the outputs are regenerated from the .rds (PureCN.R --rds, PureCN's manual-curation path; the
+//   CSV then says Curated=TRUE and why). <id>_purity_check.tsv records the decision and all candidate solutions.
 process PURECN {
     tag "${map.patient}_${map.tumor_meta.sample}"
     scratch true
@@ -25,20 +30,17 @@ process PURECN {
     tuple val(map), path("${map.patient}_${map.tumor_meta.sample}.csv"), emit: purity_ploidy
     tuple val(map), path("${map.patient}_${map.tumor_meta.sample}_dnacopy.seg"), emit: segments
     path("${map.patient}_${map.tumor_meta.sample}{.rds,.log,*.pdf,_genes.csv,_loh.csv,_variants.csv,_amplification_pvalues.csv,.vcf.gz,.vcf.gz.tbi}"), emit: all
+    path("${map.patient}_${map.tumor_meta.sample}_purity_check.tsv"), optional: true, emit: purity_check
 
     script:
     def id = "${map.patient}_${map.tumor_meta.sample}"
     def use_db = normaldb ? true : false
     def use_normal = normal_cov && (params.purecn_matched_normal_coverage || !use_db)
-    def min_p = params.purecn_min_purity as double
-    def max_p = params.purecn_max_purity as double
     def path_purity = params.purecn_purity_map ? params.purecn_purity_map[id.toString()] : null
-    if (path_purity != null) {
-        def w = params.purecn_purity_window as double
-        min_p = Math.max(0.1d, (path_purity as double) - w)
-        max_p = Math.min(0.99d, (path_purity as double) + w)
-    }
-    def purity_args = String.format(Locale.ROOT, "--min-purity %.2f --max-purity %.2f", min_p, max_p)
+    def purity_args = String.format(Locale.ROOT, "--min-purity %.2f --max-purity %.2f",
+        params.purecn_min_purity as double, params.purecn_max_purity as double)
+    def sheet = path_purity != null ? String.format(Locale.ROOT, "%.4f", path_purity as double) : ""
+    def window = String.format(Locale.ROOT, "%.4f", params.purecn_purity_window as double)
     """
     set -euo pipefail
     unset R_LIBS R_LIBS_USER R_LIBS_SITE
@@ -48,7 +50,7 @@ process PURECN {
         db=\$(ls input/normaldb/normalDB*.rds | head -1)
         DB_ARGS="--normaldb \$db"
     fi
-    echo "PureCN ${id}: normal DB ${use_db}, matched-normal coverage ${use_normal}, ${purity_args}${path_purity != null ? " (sheet purity ${path_purity})" : ""}"
+    echo "PureCN ${id}: normal DB ${use_db}, matched-normal coverage ${use_normal}, ${purity_args}${sheet ? ", sheet purity ${sheet} +- ${window} (selection)" : ""}"
 
     Rscript --vanilla \$X/PureCN.R \\
         --out ./${id} \\
@@ -68,7 +70,24 @@ process PURECN {
         --cores ${task.cpus} \\
         ${params.purecn_args} \\
         --force
-
     test -s ${id}.csv
+
+    if [ -n "${sheet}" ]; then
+        rc=0
+        Rscript --vanilla ${moduleDir}/resources/purecn_select.R ./${id} ${sheet} ${window} || rc=\$?
+        if [ \$rc -eq 3 ]; then
+            # regenerate every output for the selected solution (reads ./${id}.csv through readCurationFile)
+            Rscript --vanilla \$X/PureCN.R \\
+                --rds ./${id}.rds \\
+                --out ./${id} \\
+                --sampleid ${id} \\
+                --intervals ${intervals} \\
+                --genome ${params.purecn_genome} \\
+                --out-vcf
+        elif [ \$rc -ne 0 ]; then
+            exit \$rc
+        fi
+        test -s ${id}_purity_check.tsv
+    fi
     """
 }

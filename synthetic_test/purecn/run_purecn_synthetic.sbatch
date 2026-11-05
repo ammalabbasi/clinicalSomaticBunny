@@ -13,6 +13,8 @@
 #   run A (results_A): PCN01 tumour + matched normal (paired), PCN07 = the same tumour BAM as a tumour-only patient,
 #                      PCN02..PCN06 normal-only pool rows. Builds and publishes the PureCN normal DB (6 normals).
 #   run B (results_B): PCN08 = the same tumour alone, sheet purity 55 %, --purecn_normaldb results_A/PureCN/normaldb.
+#                      PCN09 = the same tumour, sheet purity 92 % (wrong on purpose; not scored): exercises the
+#                      solution selection + regeneration path.
 # Then evaluate_purecn.py scores purity, ploidy, integer CN, LOH and CNVkit log2 direction against truth/.
 # usage: sbatch --export=ALL,PIPE=<pipeline checkout> run_purecn_synthetic.sbatch   (default PIPE: the submit dir's repo)
 set -euo pipefail
@@ -45,6 +47,7 @@ EOF
 cat > samples_B.csv <<EOF
 patient,sample,status,bam,bai,purity
 PCN08,T,tumor,$B/PCN01_T_tumor.bam,$B/PCN01_T_tumor.bam.bai,55
+PCN09,T,tumor,$B/PCN01_T_tumor.bam,$B/PCN01_T_tumor.bam.bai,92
 EOF
 md5sum bam/*.bam > inputs.md5
 
@@ -71,6 +74,13 @@ for run in $RUNS; do
     [[ $run == B ]] && extra=(--purecn_normaldb "$D/results_A/PureCN/normaldb")
     "$NF" run "$PIPE/main.nf" "${common[@]}" --sample "$D/samples_$run.csv" --outdir "$D/results_$run" "${extra[@]}" \
         -with-trace "$D/trace_$run.txt" -with-report "$D/report_$run.html" || echo "RUN $run FAILED (exit $?)"
+done
+
+echo "== $(date -Is) purity selection (PCN08 sheet 55 % -> expect rank 1 kept; PCN09 sheet 92 % -> expect a higher-purity solution selected, Curated=TRUE)"
+for s in PCN08_T PCN09_T; do
+    f=$D/results_B/PureCN/$s/${s}_purity_check.tsv
+    [[ -s $f ]] && cut -f1-10 "$f" || echo "$s: no purity check file"
+    tail -1 "$D/results_B/PureCN/$s/$s.csv" 2>/dev/null || true
 done
 
 echo "== $(date -Is) input BAMs unchanged?"

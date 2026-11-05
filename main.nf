@@ -25,9 +25,9 @@ params.purecn_assay = ""                // assay name used in the normal DB file
 params.purecn_min_pop_af = 0.001        // gnomAD AF threshold for the germline SNP sites (and the DB flag)
 params.purecn_min_mapq = 20             // allele counting at SNP sites (bcftools mpileup -q)
 params.purecn_min_bq = 20               // allele counting at SNP sites (bcftools mpileup -Q)
-params.purecn_min_purity = 0.15         // purity search range when the sheet has no `purity` for a tumour
+params.purecn_min_purity = 0.15         // PureCN purity search range (always; a sheet purity does not narrow it)
 params.purecn_max_purity = 0.95
-params.purecn_purity_window = 0.15      // with a sheet `purity` (pathology estimate): search purity +- this
+params.purecn_purity_window = 0.15      // with a sheet `purity`: pick the most likely PureCN solution within purity +- this
 params.purecn_model = "betabin"         // PureCN.R --model (beta | betabin)
 params.purecn_sex = "?"                 // PureCN.R --sex (? detect | F | M | diploid)
 params.purecn_matched_normal_coverage = false  // paired: normalise against the matched normal instead of the normal DB
@@ -408,7 +408,7 @@ params.purecn_env = "${projectDir}/yml/purecn.yml"
 // PureCN (--tool purecn): targeted assays on GRCh38/GRCh37 only. Needs a normal DB: built from >= 2 normal rows of the
 // sheet (paired or normal-only), or a prebuilt one (--purecn_normaldb). With exactly one normal and no DB, only that
 // patient's paired tumour can run (against its matched normal). Optional sheet column `purity` (0-1, or 1-100 %)
-// bounds the purity search per tumour. Reads only the sheet (IDs, status, purity), never a BAM.
+// selects among that tumour's PureCN solutions (see Modules/PURECN/PURECN.nf). Reads only the sheet (IDs, status, purity), never a BAM.
 // Set before the includes: modules only see params that exist when they are included.
 params.purecn_genome = [GRCh38: 'hg38', GRCh37: 'hg19'][params.genome]
 params.purecn_targets = params.targets_clean ?: params.genomes[params.genome].mosdepth_bed
