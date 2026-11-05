@@ -282,6 +282,18 @@ Tumour-only calls still contain rare germline variants that are absent from gnom
 
 On mm39 and RN7, which have no panel of normals or SAGE resources, a sheet with tumour-only patients stops with an error.
 
+<!-- >>> mutect2_pon -->
+**Mutect2 panel of normals from your own normals.** The database PON (`MuTect2.PON.5210` on GRCh38) is generic WGS/WES. Recurrent artefacts specific to one assay (capture, chemistry, vendor pipeline) are not in it, so they show up as low-VAF "somatic" calls, most of all in tumour-only samples. A PON built from normals sequenced on the same assay removes them.
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--mutect2_cohort_pon build` | off | Build a PON from every normal BAM in the sheet (paired normals and normal-only rows), then call this run's tumours (paired and tumour-only) against it instead of the database PON. Each normal goes through Mutect2 tumour-only with `--max-mnp-distance 0` over the same interval shards as the tumours (target shards with `--targets`). Then GenomicsDBImport over the padded targets (or the shards) and CreateSomaticPanelOfNormals with the gnomAD germline resource. A site enters the PON when at least 2 normals carry it |
+| `--mutect2_cohort_pon_name` | `cohort` | Output name: `Mutect2_PON/<name>.pon.vcf.gz(.tbi)` and `<name>.pon.normals.txt` |
+| `--mutect2_pon <vcf.gz>` | database PON | Use a prebuilt PON (for example one published by an earlier `build` run) for all Mutect2 calling. Its `.tbi` (or `.idx` for `.vcf`) must be next to it. Cannot be combined with `build` |
+
+Fewer than 2 normals stops the run, and fewer than 10 gives a warning: with only a few normals the PON catches only the most recurrent artefacts. Build one PON per assay, from normals sequenced on that assay. For a cohort that is mostly tumour-only, add the assay's normals as normal-only rows, or build the PON once and reuse it with `--mutect2_pon`. The PON log line and `pipeline.log` say which PON was used.
+<!-- <<< mutect2_pon -->
+
 **Sample-sheet checks.** The run stops before any job is submitted if:
 
 - a status is not `tumor`/`normal`;
