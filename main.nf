@@ -18,6 +18,25 @@ params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
+// >>> tmb
+// Tumour mutational burden (--tool tmb): PASS consensus SNVs+indels with tumour VAF >= tmb_min_vaf inside the
+// callable territory (tmb_regions with tumour depth >= tmb_min_depth and, for pairs, normal depth >= tmb_min_normal_depth).
+params.tmb_regions = null                 // BED to count over; default the cleaned --targets (pass a coding-exon BED for coding TMB)
+params.tmb_min_depth = 50                 // tumour depth for a base to be callable
+params.tmb_min_normal_depth = 20          // matched-normal depth (pairs only)
+params.tmb_min_vaf = 0.05                 // tumour VAF, recomputed from the tumour BAM
+params.tmb_min_mapq = 20                  // reads counted for depth and VAF
+params.tmb_min_baseq = 20                 // bases counted for VAF
+params.tmb_scenario = 4                   // paired consensus: POST scenario 4, 5 or 6 (see README)
+params.tmb_coding_only = false            // count only coding consequences; needs a CSQ/ANN-annotated VCF, else ignored with a warning
+params.tmb_germline_calls = null          // tumour-only: directory of PureCN <patient>_<sample>_variants.csv (optional)
+params.tmb_min_somatic_posterior = 0.5    // tumour-only + PureCN: drop variants with POSTERIOR.SOMATIC below this
+params.tmb_dir = "${params.results_dir}/TMB"
+params.tmb_env = "$projectDir/yml/tmb.yml"
+if (!(params.tmb_scenario.toString() in ['4', '5', '6'])) {
+    error "--tmb_scenario must be 4, 5 or 6 (scenario 3 output is not PASS-gated)."
+}
+// <<< tmb
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
 
@@ -262,6 +281,22 @@ if (params.targets) {
 }
 params.targets_clean = targetsClean
 params.mosdepth_bed = params.mosdepth_bed ?: (params.targets_clean ?: params.genomes[params.genome].mosdepth_bed)
+// >>> tmb
+if (params.tool && params.tool.toString().split(',').collect { it.trim() }.contains('tmb')) {
+    if (!(params.tmb_regions ?: params.targets_clean)) {
+        error "--tool tmb needs --tmb_regions <bed> (or --targets): TMB is mutations per callable Mb of a defined territory."
+    }
+    if (params.tmb_regions && !file(params.tmb_regions).exists()) {
+        error "--tmb_regions file not found: ${params.tmb_regions}"
+    }
+    if (params.tmb_germline_calls && !file(params.tmb_germline_calls).isDirectory()) {
+        error "--tmb_germline_calls must be a directory holding PureCN <patient>_<sample>_variants.csv files"
+    }
+    if (!(params.genome in ['GRCh38', 'GRCh37'])) {
+        error "--tool tmb counts the POST consensus, which runs only for --genome GRCh38 or GRCh37."
+    }
+}
+// <<< tmb
 params.muse_vcf = params.muse_vcf ?: params.genomes[params.genome].muse_vcf
 params.recal_knownsite1 = params.recal_knownsite1 ?: params.genomes[params.genome].recal_knownsite1
 params.recal_knownsite2 = params.recal_knownsite2 ?: params.genomes[params.genome].recal_knownsite2
@@ -475,6 +510,9 @@ include { POST_scenario4 } from './Modules/POST_scenario4.nf'
 include { POST_scenario5 } from './Modules/POST_scenario5.nf'
 include { POST_scenario6 } from './Modules/POST_scenario6.nf'
 include { MERGE_HEADER } from './Modules/MERGE_HEADER.nf'
+// >>> tmb
+include { TMB } from './Modules/TMB/TMB.nf'
+// <<< tmb
 include { ALLELECOUNTER } from './Modules/ALLELECOUNTER.nf'
 
 include { SAVE_CSV_FASTQC } from './Modules/SAVE_CSV/SAVE_CSV_FASTQC'
@@ -1457,5 +1495,60 @@ workflow {
         ch_all_outputs = ch_out1.mix(ch_out2, ch_out3)
 
         ALLELECOUNTER(ch_all_outputs)
+
+        // >>> tmb
+        // One block serves every entry point (mapping/markdup/recalibration via RECALIBRATE_out, variant_calling via
+        // RENAME_BAM_HEADER): vaf_source / recal_map_keyed above already pick the right BAMs for each path.
+        if (params.tool && isToolSelected('tmb')) {
+            def tmbScenario = params.tmb_scenario.toString()
+            def tmbPairedVcf = [
+                '4': POST_scenario4.out.final_vcf,
+                '5': POST_scenario5.out.final_vcf,
+                '6': POST_scenario6.out.final_vcf
+            ][tmbScenario]
+            // HOOK (annotation branch): to count coding-only on an annotated VCF, replace tmbPairedVcf /
+            // tmbTumorOnlyVcf with channels of [patient_sample, annotated_vcf] (CSQ or ANN in the header).
+            def tmbTumorOnlyVcf = POST_TUMOR_ONLY.out.consensus_pass.map { ps, vcf, tbi -> [ps, vcf] }
+
+            // HOOK (PureCN branch): replace this with the in-pipeline PureCN [patient_sample, variants.csv] channel.
+            def tmbGermline = Channel.empty()
+            if (params.tmb_germline_calls) {
+                tmbGermline = tumor_vaf
+                    .filter { it[0] in params.tumor_only_patients }
+                    .map { p, meta, bam, bai -> "${p}_${meta.sample}" }
+                    .map { ps ->
+                        def f = file("${params.tmb_germline_calls}/${ps}_variants.csv")
+                        if (!f.exists()) log.warn "TMB ${ps}: no ${f.name} in --tmb_germline_calls; no germline filter for this sample"
+                        [ps, f.exists() ? f : []]
+                    }
+            }
+
+            def tmbPaired = tmbPairedVcf
+                .join(recal_map_keyed)
+                .map { ps, vcf, m -> [ps, 'paired', "scenario_${tmbScenario}", vcf, m.tumor, m.tumor_bai, m.normal, m.normal_bai, []] }
+
+            def tmbTumorOnlyBams = tumor_vaf
+                .filter { it[0] in params.tumor_only_patients }
+                .map { p, meta, bam, bai -> ["${p}_${meta.sample}", bam, bai] }
+            def tmbTumorOnly = tmbTumorOnlyVcf
+                .join(tmbTumorOnlyBams)
+                .join(tmbGermline, remainder: true)
+                .filter { it.size() == 5 && it[1] != null && it[2] != null }
+                .map { ps, vcf, bam, bai, germ -> [ps, 'tumor_only', 'tumor_only_consensus', vcf, bam, bai, [], [], germ ?: []] }
+
+            TMB(tmbPaired.mix(tmbTumorOnly), file(params.tmb_regions ?: params.targets_clean))
+
+            TMB.out.tmb_tsv
+                .map { ps, tsv -> tsv }
+                .collectFile(name: 'tmb_cohort.tsv', keepHeader: true, skip: 1, sort: true, storeDir: params.tmb_dir)
+            TMB.out.tmb_tsv.subscribe { ps, tsv ->
+                def rows = tsv.readLines()
+                def h = rows[0].split('\t') as List
+                def v = rows[1].split('\t') as List
+                def w = v[h.indexOf('warning')]
+                if (w != 'none') log.warn "TMB ${ps}: ${w}"
+            }
+        }
+        // <<< tmb
     }
 }

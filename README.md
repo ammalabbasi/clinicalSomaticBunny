@@ -304,6 +304,37 @@ nextflow run main.nf -profile tscc_slurm,conda \
 
 Run one assay per run: the target BED and the CNVkit reference are per assay.
 
+<!-- >>> tmb -->
+#### Tumour mutational burden (`--tool tmb`)
+
+TMB = eligible somatic variants / callable Mb, per tumour, for pairs and tumour-only patients from every entry point (`--genome GRCh38|GRCh37`).
+
+- **Callable territory**: bases of `--tmb_regions` (default: the cleaned `--targets`; pass a coding-exon BED to count coding territory only) where the tumour has depth ≥ `--tmb_min_depth` and, for pairs, the matched normal has depth ≥ `--tmb_min_normal_depth`. Depth comes from `mosdepth --quantize` with reads of MAPQ ≥ `--tmb_min_mapq` that are not duplicate, secondary, supplementary or QC-failed.
+- **Eligible variants**: PASS SNVs, MNVs and indels (one per ALT allele) whose VCF `POS` (the anchor base for indels) is callable and whose tumour VAF, recomputed from the tumour BAM (MAPQ ≥ `--tmb_min_mapq`, base quality ≥ `--tmb_min_baseq`), is ≥ `--tmb_min_vaf`.
+  - Pairs count the POST consensus of `--tmb_scenario` (default 4). All four standard VCFs (scenarios 3–6) are written by `MERGE_HEADER`, but scenario 3 does not gate on PASS. Scenario 4 is the 2-of-4 SNV / 2-of-3 indel consensus with the PASS gate. Scenarios 5 and 6 also prefilter each caller on PASS and run the DKFZ bias filter, and 6 adds TLOD ≥ 10 / SomaticEVS ≥ 13. All of them keep the same records as `POST/standard_vcf/*_scenario_N_standard_PASSed.vcf`.
+  - Tumour-only patients count `POST/tumor_only/*_tumor_only_consensus.PASS.vcf.gz`. Optionally, `--tmb_germline_calls <dir>` holding PureCN `<patient>_<sample>_variants.csv` files drops variants with `POSTERIOR.SOMATIC` < `--tmb_min_somatic_posterior` (0.5). Variants that PureCN did not assess are kept.
+  - `--tmb_coding_only` counts only coding consequences, and only when the VCF carries a VEP `CSQ` or SnpEff `ANN` annotation. The standard consensus VCFs are not annotated, so for now the option is ignored with a warning.
+
+| Option | Default |
+|--------|---------|
+| `--tmb_regions` | cleaned `--targets` |
+| `--tmb_min_depth` / `--tmb_min_normal_depth` | `50` / `20` |
+| `--tmb_min_vaf` | `0.05` |
+| `--tmb_min_mapq` / `--tmb_min_baseq` | `20` / `20` |
+| `--tmb_scenario` | `4` (4, 5 or 6) |
+| `--tmb_coding_only` | `false` |
+| `--tmb_germline_calls`, `--tmb_min_somatic_posterior` | none, `0.5` |
+
+Outputs go to `TMB/`:
+
+- `<patient>_<sample>.tmb.tsv`: `n_variants`, `n_snv`, `n_indel`, `callable_bp`, `callable_Mb`, `TMB`, the thresholds, `mode`, `source`, exclusion counts and `warning`.
+- `<patient>_<sample>.tmb.variants.tsv`: every consensus record with its tumour VAF and the reason it was counted or excluded.
+- `<patient>_<sample>.tmb.callable.bed`: the callable territory.
+- `tmb_cohort.tsv`: one row per tumour.
+
+When callable territory is under 1 Mb, the `warning` column and the run log say so. Panel TMB from a few hundred kb is noisy, and a 1-Mb panel with 5 mutations has a Poisson 95% interval of about 1.6–11.7 mut/Mb. Panel TMB is not comparable to WES TMB unless it is calibrated on the assay. Tumour-only TMB is inflated by rare germline variants (see above), so it should not be pooled with paired TMB.
+<!-- <<< tmb -->
+
 ### Advanced Options
 
 #### Publishing Intermediate Files

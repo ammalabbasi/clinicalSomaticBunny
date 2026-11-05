@@ -1,0 +1,8 @@
+name: tmb
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - pysam=0.22.1
+  - mosdepth=0.3.14
