@@ -304,6 +304,43 @@ nextflow run main.nf -profile tscc_slurm,conda \
 
 Run one assay per run: the target BED and the CNVkit reference are per assay.
 
+<!-- >>> pcgr -->
+#### Clinical interpretation with PCGR (`--tool pcgr`)
+
+[PCGR](https://sigven.github.io/pcgr/) 2.3.2 annotates each tumour's consensus SNVs/indels (VEP 115 + CIViC, CGI, ClinVar, COSMIC/TCGA, …), assigns AMP/ASCO/CAP tiers and writes an HTML report, an Excel workbook and TSVs. It runs on pairs and tumour-only patients from every entry point.
+
+**Install once** (conda, no root; the PCGR lock files are in `yml/pcgr/`):
+
+```bash
+D=/path/to/somaticbunny_resources/pcgr
+bash Modules/PCGR/install_pcgr.sh $D envs             # $D/conda/pcgr + $D/conda/pcgrr (keep them side by side)
+bash Modules/PCGR/install_pcgr.sh $D refdata grch38   # PCGR bundle 20260620, 7.7 GB download (7.3 GB unpacked)
+bash Modules/PCGR/install_pcgr.sh $D vep GRCh38       # Ensembl VEP 115 cache, 25.3 GB download
+# GRCh37: same with `refdata grch37` and `vep GRCh37`
+```
+
+**Run:** add `--tool pcgr --pcgr_env $D/conda/pcgr --pcgr_refdata $D/refdata/20260620 --pcgr_vep_dir $D/vep_cache`.
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--pcgr_scenario` | `5` | Which paired consensus feeds PCGR: `POST/standard_vcf/<id>/<id>_scenario_N_standard_PASSed.vcf`, N = 3 or 4 (2-of-4 SNV / 2-of-3 indel over all caller records), 5 (only records that PASS in each caller, plus the DKFZ bias filter) or 6 (5 with Mutect2 TLOD ≥ 10 and Strelka2 SomaticEVS ≥ 13) |
+| `--pcgr_assay` | from `--type` | `TARGETED` for panel, `WES` for exome, `WGS` for genome |
+| `--pcgr_effective_target_size_mb` | merged `--targets` size | TMB denominator. Without `--targets`, 34 Mb (PCGR's coding exome); capped at 34 |
+| sheet column `tumor_site` | `--pcgr_tumor_site 0` | Optional PCGR primary-site code per tumour row (0 any, 6 breast, 9 colon/rectum, 15 lung, 23 prostate, …; full list in `pcgr --help`). Focuses biomarker matching and signature priors |
+| `--pcgr_msi`, `--pcgr_signatures` | on | MSI and signature fitting; see caveats |
+| `--pcgr_tumor_dp_min/_af_min`, `--pcgr_tmb_dp_min/_af_min` | unset | PCGR report/TMB depth and VAF filters |
+| `--pcgr_gnomad_popmax_af`, `--pcgr_tonly_germline_filters` | `0.001`, on | Tumour-only germline filters (gnomAD popmax AF; likely hom/het germline) |
+| `--pcgr_pon_vcf` | unset | Tumour-only: extra panel-of-normals VCF (records flagged `INFO/PANEL_OF_NORMALS`), excluded with `--exclude_pon` |
+| `--pcgr_cna_from_purecn` | off | Hook: use PureCN allele-specific segments as PCGR `--input_cna` (converter `Modules/PCGR/purecn_to_pcgr_cna.py`; wire `PURECN` where main.nf marks the hook) |
+| `--pcgr_extra_args` | | Passed to `pcgr` verbatim (e.g. `--vep_gencode_basic`) |
+
+**Input VCF.** PCGR reads tumour depth and allele fraction only from INFO. The paired standard VCF has no FORMAT columns, so `Modules/PCGR/pcgr_prepare_vcf.py` keeps CHROM/POS/REF/ALT of the consensus and writes `TDP`/`TAF` (tumour) and `NDP`/`NAF` (matched normal) from the callers' FORMAT read counts: Mutect2 AD/DP, else SAGE AD/DP, else Strelka2 tier-1 counts (`TVAF_SRC` says which). Tumour-only input is `POST/tumor_only/<id>/<id>_tumor_only_consensus.PASS.vcf.gz`, whose Mutect2 FORMAT AD/DP give `TDP`/`TAF`. Only chromosomes 1–22, X, Y are kept. PCGR runs with `--tumor_dp_tag TDP --tumor_af_tag TAF` (and `--control_dp_tag NDP --control_af_tag NAF` for pairs) and `--tumor_only` for tumour-only patients.
+
+**Caveats for panels.** PCGR predicts MSI only for WES/WGS tumour–normal data, so it is off for `--type panel` and for tumour-only patients (use the MSIsensor-pro step). PCGR TMB on a panel smaller than 1 Mb is not robust, and the clean target BED also counts intronic and UTR baits, so set `--pcgr_effective_target_size_mb` to the panel's coding footprint when you know it. Signature fitting needs at least `--pcgr_min_mutations_signatures` SNVs (200; minimum 100), which most panels do not reach, so it is skipped. Tumour-only TMB and signatures still include rare germline variants. OncoKB annotation is off: it needs a licensed API token (`--pcgr_extra_args "--oncokb_api_token …"`).
+
+**Output:** `PCGR/<patient>_<sample>/`: `<id>.pcgr.grch38.html` (report), `.xlsx`, `.snv_indel_ann.tsv.gz`, `.tmb.tsv`, `.pass.vcf.gz` and the rest of PCGR's files, plus the prepared input (`<id>.pcgr_input.vcf.gz`) and a one-line count summary. **These reports contain patient-level clinical results. Keep them on the cluster in a protected `--outdir`. Do not email, upload or commit them.**
+<!-- <<< pcgr -->
+
 ### Advanced Options
 
 #### Publishing Intermediate Files

@@ -17,6 +17,28 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
+// >>> pcgr
+// PCGR 2.3.2 clinical interpretation of the consensus calls (--tool pcgr). Env/data: Modules/PCGR/install_pcgr.sh
+params.pcgr_env = null                    // prebuilt conda env <dir>/pcgr (sibling <dir>/pcgrr must exist)
+params.pcgr_refdata = null                // PCGR bundle dir holding data/grch38 (bundle 20260620 for PCGR 2.3.2)
+params.pcgr_vep_dir = null                // VEP cache parent dir holding homo_sapiens/115_GRCh38
+params.pcgr_scenario = 5                  // paired input: POST/standard_vcf scenario 3|4|5|6
+params.pcgr_assay = null                  // WGS|WES|TARGETED; default from --type (genome|exome|panel)
+params.pcgr_effective_target_size_mb = null // default: merged size of --targets (capped at 34), else 34
+params.pcgr_tumor_site = 0                // PCGR primary-site code used when the sheet has no tumor_site value (0 = any)
+params.pcgr_msi = true                    // only applied to WES/WGS tumour-normal pairs (PCGR's own restriction)
+params.pcgr_signatures = true
+params.pcgr_min_mutations_signatures = 200  // PCGR default; >= 100. Panels rarely reach it, so fitting is skipped
+params.pcgr_tumor_dp_min = null
+params.pcgr_tumor_af_min = null
+params.pcgr_tmb_dp_min = null
+params.pcgr_tmb_af_min = null
+params.pcgr_gnomad_popmax_af = 0.001      // tumour-only germline filter (PCGR default)
+params.pcgr_tonly_germline_filters = true // tumour-only: --exclude_likely_hom_germline --exclude_likely_het_germline
+params.pcgr_pon_vcf = null                // HOOK (cohort PON): VCF with INFO flag PANEL_OF_NORMALS, tumour-only only
+params.pcgr_cna_from_purecn = false       // HOOK (PureCN): feed PureCN loh.csv segments as --input_cna
+params.pcgr_extra_args = ''               // passed verbatim to pcgr
+// <<< pcgr
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
@@ -361,6 +383,9 @@ params.ascat_dir="${params.results_dir}/ASCAT"
 params.conpair="${params.database_path}/Conpair-0.2"
 params.manta_dir="${params.results_dir}/MANTA"
 params.post_dir="${params.results_dir}/POST"
+// >>> pcgr
+params.pcgr_dir="${params.results_dir}/PCGR"
+// <<< pcgr
 params.intervals_dir="${params.results_dir}/custom_intervals"
 params.VAF_dir="${params.results_dir}/POST/VAF"
 
@@ -487,6 +512,9 @@ include { SAVE_CSV_MuSE } from './Modules/SAVE_CSV/SAVE_CSV_MuSE'
 include { SAVE_CSV_Mutect2 } from './Modules/SAVE_CSV/SAVE_CSV_Mutect2'
 include { SAVE_CSV_CONPAIR } from './Modules/SAVE_CSV/SAVE_CSV_CONPAIR'
 include { SAVE_CSV_MOSDEPTH } from './Modules/SAVE_CSV/SAVE_CSV_MOSDEPTH'
+// >>> pcgr
+include { PCGR } from './Modules/PCGR/PCGR'
+// <<< pcgr
 
 // Sample-sheet checks and tumour-only routing (feature/clinical-bam).
 // Reads only the sheet (IDs and paths), never a BAM. Tumours without a normal used to vanish silently at
@@ -577,6 +605,79 @@ if (sheetFile.exists()) {
 }
 params.tumor_only_patients = tumorOnlyPatients
 params.cnvkit_ref_mode = cnvkitRefMode
+
+// >>> pcgr
+// PCGR settings resolved before any job starts: assay, TMB target size, per-tumour primary site (optional sheet
+// column tumor_site, PCGR codes 0-30). Reads only the sheet header and that column, never a BAM/VCF.
+def pcgrSites = [:]
+def pcgrAssay = params.pcgr_assay ?: (params.type == 'panel' ? 'TARGETED' : (params.type == 'exome' ? 'WES' : 'WGS'))
+def pcgrSizeMb = 34.0
+if (params.tool && params.tool.toString().split(',').collect { it.trim() }.contains('pcgr')) {
+    def problems = []
+    if (!(params.genome in ['GRCh38', 'GRCh37'])) problems << "--tool pcgr needs --genome GRCh38 or GRCh37"
+    if (!(pcgrAssay in ['WGS', 'WES', 'TARGETED'])) problems << "--pcgr_assay must be WGS, WES or TARGETED"
+    if (!(params.pcgr_scenario.toString() in ['3', '4', '5', '6'])) problems << "--pcgr_scenario must be 3, 4, 5 or 6"
+    def asm = params.genome == 'GRCh37' ? 'grch37' : 'grch38'
+    if (!params.pcgr_env || !file("${params.pcgr_env}/bin/pcgr").exists()) {
+        problems << "--pcgr_env must point to the PCGR conda env (<dir>/pcgr with bin/pcgr; see Modules/PCGR/install_pcgr.sh)"
+    } else if (!file("${file(params.pcgr_env).parent}/pcgrr/bin/Rscript").exists()) {
+        problems << "PCGR needs its R env next to --pcgr_env: ${file(params.pcgr_env).parent}/pcgrr not found"
+    }
+    if (!params.pcgr_refdata || !file("${params.pcgr_refdata}/data/${asm}").isDirectory()) {
+        problems << "--pcgr_refdata must contain data/${asm} (PCGR reference bundle)"
+    }
+    if (!params.pcgr_vep_dir || !file("${params.pcgr_vep_dir}/homo_sapiens").isDirectory() ||
+        !file("${params.pcgr_vep_dir}/homo_sapiens").list().any { it.endsWith("_${params.genome}") }) {
+        problems << "--pcgr_vep_dir must contain homo_sapiens/<release>_${params.genome} (VEP cache)"
+    }
+    if (params.pcgr_effective_target_size_mb) {
+        pcgrSizeMb = params.pcgr_effective_target_size_mb as double
+    } else if (params.targets_clean) {
+        // merged length of the clean (unpadded) targets
+        def iv = file(params.targets_clean).readLines().collect { it.split('\t') }
+            .collect { [it[0], it[1] as long, it[2] as long] }.sort { a, b -> a[0] <=> b[0] ?: a[1] <=> b[1] }
+        long bp = 0; def cur = null
+        iv.each { r ->
+            if (cur && cur[0] == r[0] && r[1] <= cur[2]) { cur[2] = Math.max(cur[2], r[2]) }
+            else { if (cur) bp += cur[2] - cur[1]; cur = [r[0], r[1], r[2]] }
+        }
+        if (cur) bp += cur[2] - cur[1]
+        pcgrSizeMb = Math.round(bp / 1e4) / 100.0
+        if (pcgrSizeMb > 34) {
+            log.warn "PCGR: targets cover ${pcgrSizeMb} Mb; PCGR caps the TMB denominator at the 34 Mb coding exome."
+            pcgrSizeMb = 34.0
+        }
+        if (pcgrSizeMb < 0.01) pcgrSizeMb = 0.01
+    }
+    if (pcgrAssay == 'TARGETED' && pcgrSizeMb < 1) {
+        log.warn "PCGR: effective target size ${pcgrSizeMb} Mb (< 1 Mb). PCGR's TMB is not robust below 1 Mb; MSI is not " +
+                 "predicted for TARGETED assays or tumour-only samples, and signature fitting needs >= ${params.pcgr_min_mutations_signatures} SNVs."
+    }
+    if (sheetFile.exists()) {
+        def lines = sheetFile.readLines().findAll { it.trim() }
+        def header = lines[0].split(',').collect { it.trim() }
+        def iSite = header.indexOf('tumor_site')
+        if (iSite >= 0) {
+            lines.drop(1).eachWithIndex { line, k ->
+                def f = line.split(',', -1) as List
+                if (f[header.indexOf('status')] != 'tumor' || !f[iSite]) return
+                if (!(f[iSite] ==~ /\d+/) || (f[iSite] as int) > 30) {
+                    problems << "sample sheet line ${k + 2}: tumor_site must be a PCGR site code 0-30 (see pcgr --help)"
+                } else {
+                    pcgrSites["${f[header.indexOf('patient')]}_${f[header.indexOf('sample')]}"] = f[iSite] as int
+                }
+            }
+        }
+    }
+    if (params.pcgr_pon_vcf && !file(params.pcgr_pon_vcf).exists()) problems << "--pcgr_pon_vcf not found"
+    if (problems) error "PCGR:\n  " + problems.join('\n  ')
+    log.info "PCGR: assay ${pcgrAssay}, effective target size ${pcgrSizeMb} Mb, paired input scenario ${params.pcgr_scenario}, " +
+             "${pcgrSites.size()} tumour(s) with a tumor_site code. Reports in ${params.results_dir}/PCGR hold patient-level results: keep them on the cluster."
+}
+params.pcgr_assay_run = pcgrAssay
+params.pcgr_target_size_mb_run = pcgrSizeMb
+params.pcgr_tumor_sites = pcgrSites
+// <<< pcgr
 
 // Define a workflow completion handler
 workflow.onComplete {
@@ -1383,6 +1484,40 @@ workflow {
         merge_all = merge_3.mix(merge_4, merge_5, merge_6)
 
 		MERGE_HEADER(merge_all)
+
+        // >>> pcgr
+        // PCGR on every tumour's consensus: pairs from the chosen scenario's standard VCF (+ the caller VCFs whose
+        // FORMAT fields give tumour/normal depth and AF), tumour-only from POST_TUMOR_ONLY's PASS VCF. This block is
+        // shared by all entry points (mapping, markdup, recalibration, variant_calling).
+        if (isToolSelected('pcgr')) {
+            def pcgrNone = file("${projectDir}/Modules/PCGR/assets/NO_FILE")
+            def pcgrSuffix = "_scenario_${params.pcgr_scenario}_standard_PASSed.vcf"
+            pcgr_paired = MERGE_HEADER.out.final_standard_vcf
+                .filter { vcf -> vcf.name.endsWith(pcgrSuffix) }
+                .map { vcf -> [vcf.name - pcgrSuffix, vcf] }
+                .join(POST_rename.out.renamed_postInput
+                    .map { ps, m2, muse, st_snv, st_indel, sage, bam, bai -> [ps, m2, sage, st_snv, st_indel] })
+                .map { ps, vcf, m2, sage, st_snv, st_indel -> [ps, 'paired', vcf, m2, sage, st_snv, st_indel] }
+            pcgr_tonly = POST_TUMOR_ONLY.out.consensus_pass
+                .map { ps, vcf, tbi -> [ps, 'tumor_only', vcf, pcgrNone, pcgrNone, pcgrNone, pcgrNone] }
+            // HOOK (PureCN, --pcgr_cna_from_purecn): replace Channel.empty() with the PureCN allele-specific segments
+            // keyed like the VCFs, e.g. PURECN.out.loh.map { map, loh_csv -> ["${map.patient}_${map.tumor_meta.sample}", loh_csv] }
+            // (PureCN <sample>_loh.csv: chr,start,end,C,M; converted by Modules/PCGR/purecn_to_pcgr_cna.py).
+            pcgr_cna = Channel.empty()
+            if (params.pcgr_cna_from_purecn) {
+                log.warn "--pcgr_cna_from_purecn: PureCN is not wired on this branch yet; PCGR runs without CNA input."
+            }
+            pcgr_paired.mix(pcgr_tonly)
+                .join(pcgr_cna, remainder: true)
+                .filter { it.size() == 8 && it[1] in ['paired', 'tumor_only'] }
+                .map { ps, mode, vcf, m2, sage, st_snv, st_indel, cna ->
+                    def site = params.pcgr_tumor_sites.containsKey(ps) ? params.pcgr_tumor_sites[ps] : params.pcgr_tumor_site
+                    [ps, mode, site, params.pcgr_assay_run, params.pcgr_target_size_mb_run, vcf, m2, sage, st_snv, st_indel, cna ?: pcgrNone]
+                }
+                .set { pcgr_input }
+            PCGR(pcgr_input)
+        }
+        // <<< pcgr
 
 		
 
