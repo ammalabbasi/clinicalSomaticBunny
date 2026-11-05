@@ -1,0 +1,9 @@
+name: umi_fgbio
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - fgbio=3.1.2
+  - bwa-mem2=2.3
+  - samtools=1.24
+  - openjdk=17

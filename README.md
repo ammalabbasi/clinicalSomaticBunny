@@ -365,6 +365,49 @@ When callable territory is under 1 Mb, the `warning` column and the run log say 
 
 Outputs: `MSI/paired/<patient>_<sample>/` and `MSI/tumor_only/<patient>_<sample>/` hold the raw MSIsensor-pro files and `<patient>_<sample>.msi_status.tsv`. `MSI/msi_summary.tsv` has one row per tumour: `patient, sample, mode, sites_evaluated, unstable_sites, msi_score_pct, threshold_pct, status (MSI-H|MSS), qc (PASS|LOW_SITES)`. Paired and tumour-only scores are on different scales, so do not compare them with one cut-off. Check both thresholds on your assay with samples of known MSI status (IHC/PCR) before using the status.
 <!-- <<< msi -->
+<!-- >>> umi -->
+#### UMI consensus instead of MarkDuplicates (`--umi`, FASTQ entry only)
+
+Panels sequenced with unique molecular identifiers (UMIs) can collapse PCR duplicates into one consensus read per molecule. Errors present in only one read of a family are voted out, so low-VAF calls are less often PCR or sequencing errors. With `--umi` and `--first_step mapping`, each sample goes through [fgbio](https://github.com/fulcrumgenomics/fgbio) 3.1.2 (`yml/umi.yml`):
+
+`FastqToBam` (UMI → `RX`) → `bwa-mem2` + `ZipperBams` → `GroupReadsByUmi` → `CallMolecularConsensusReads` (or `CallDuplexConsensusReads`) → re-align consensus (`bwa-mem2` + `ZipperBams`) → `FilterConsensusReads` → BQSR → callers.
+
+MarkDuplicates is skipped because the consensus reads are already one per molecule. Read groups keep `ID:<patient>` and `SM:<patient>_<sample>_<status>`. Paired and tumour-only patients both work. `--umi` is refused at the other entry points, because vendor BAMs are already deduplicated.
+
+How the UMI is delivered differs between vendors. Give exactly one source:
+
+| UMI source | Option | Example |
+|---|---|---|
+| Inline, at the start of the reads | `--umi_read_structure '<R1> <R2>'` ([fgbio read structures](https://github.com/fulcrumgenomics/fgbio/wiki/Read-Structures)) | `'3M2S+T 3M2S+T'` = 3 bp UMI, 2 bp skipped, rest template, on both reads |
+| Separate UMI/index read | `--umi_fastq_column` + sheet column `fastq_umi` | default structures `'+T +T +M'`; override with three structures |
+| In the read name (`@...:ACGTACGT`, BCL Convert style) | `--umi_from_header` | `--umi_read_structure` may still trim, e.g. `'5S+T 5S+T'`, but cannot contain `M` |
+
+| Option | Default | What it does |
+|---|---|---|
+| `--umi_group_strategy` | `adjacency` (`paired` with `--umi_duplex`) | `GroupReadsByUmi --strategy`: `identity`, `edit`, `adjacency` or `paired` |
+| `--umi_edits` | `1` | UMI mismatches allowed within a family |
+| `--umi_min_map_q` | `1` | Reads below this MAPQ are not grouped |
+| `--umi_min_reads` | `1` | Reads needed for a consensus (call and filter). `1` keeps singletons. Duplex takes up to three values, e.g. `'2 1 1'` |
+| `--umi_duplex` | off | Duplex consensus. Needs a UMI on both ends of the molecule (`M` in both read structures, or two UMIs in the UMI read or read name) |
+| `--umi_min_base_quality` | `30` | `FilterConsensusReads`: consensus bases below this become `N`. fgbio's own best practice uses 40–45 with `--umi_min_reads ≥ 2`. At `1`, a high value masks every singleton |
+| `--umi_max_base_error_rate` / `--umi_max_no_call_fraction` | `0.2` / `0.2` | `FilterConsensusReads` base masking and read removal |
+
+Outputs go to `UMI/` (`<patient>_<sample>_<status>.*`):
+
+- `fgbio_group_family_size_histogram.txt` and `fgbio_group_metrics.txt` (MultiQC's fgbio module reads the histogram)
+- `umi_consensus_filter_counts.tsv`: consensus reads in, and kept after filtering
+- `fgbio_duplex.*` (duplex only: CollectDuplexSeqMetrics family sizes, duplex yield, UMI counts)
+- `*_umi_consensus.bam` (only with `--publish markdup_bam`)
+
+`--cleanup` does not remove the UMI intermediates. Throughput depends on family sizes. Check the histogram before you trust `--umi_min_reads`.
+
+Synthetic check (simulated reads from a public GRCh38 window; panel of 40 × 250 bp; family sizes 1–8; per-read errors at 15 hotspots, 4 % of reads each; five SNVs at 2–3 % VAF per tumour). The same reads were run with and without `--umi`:
+
+- **Families:** fgbio recovered 120,010 families from 120,000 simulated molecules.
+- **Paired, Strelka2:** error-hotspot false positives fell from 12/15 to 0/15. Low-VAF SNVs found went from 3/5 to 4/5.
+- **Paired, POST consensus:** hotspot false positives fell from 6 to 0. Low-VAF SNVs found went from 0/5 to 4/5.
+- **Tumour-only, Mutect2:** low-VAF SNVs found went from 0/5 to 5/5.
+<!-- <<< umi -->
 
 ### Advanced Options
 
