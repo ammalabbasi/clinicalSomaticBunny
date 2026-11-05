@@ -259,7 +259,7 @@ When a custom reference is provided, the pipeline will automatically generate th
 
 ### Clinical BAMs: panels, tumour-only samples, vendor references
 
-Vendor deliveries (e.g. Tempus, CARIS) are usually processed BAMs from targeted panels, often without a matched normal, and often aligned to b37. Start them at `--first_step variant_calling`.
+Vendor deliveries (e.g. Tempus, CARIS) are usually processed BAMs from targeted panels, often without a matched normal, and often aligned to b37. Start them at `--first_step variant_calling`. Clinical FASTQs start at `--first_step mapping` (sheet columns `patient,sample,status,fastq_1,fastq_2`, one row per sample, so concatenate lanes first); panel mode and tumour-only patients work there too.
 
 | Option | Default | What it does |
 |--------|---------|--------------|
@@ -270,7 +270,7 @@ Vendor deliveries (e.g. Tempus, CARIS) are usually processed BAMs from targeted 
 | `--cnvkit_reference` | `auto` | `pooled`: CNVkit reference built from the run's normals. `flat`: no normals needed; every bin gets the same expected coverage, with GC and repeat corrections but no per-bait capture correction, so large CNAs stay visible and small ones are unreliable. `auto` uses pooled when the sheet has normals and flat when it has none |
 | `--outdir <dir>` | `<pipeline>/RESULTS` | Where `RESULTS`, `REPORT` and `pipeline.log` go. Use a protected location for patient data, so results are not written inside the code checkout |
 
-**Tumour-only samples.** A patient with a tumour row and no normal row is no longer dropped. With `--first_step variant_calling`:
+**Tumour-only samples.** A patient with a tumour row and no normal row is no longer dropped. From any entry point (`mapping`, `markdup`, `recalibration` or `variant_calling`) with `--genome GRCh38` or `GRCh37`:
 
 - Mutect2 runs in tumour-only mode (panel of normals + gnomAD germline resource), and SAGE runs without `-reference`.
 - CNVkit calls copy number against the pooled normals of the run (at least one paired normal is needed).
@@ -280,7 +280,7 @@ Vendor deliveries (e.g. Tempus, CARIS) are usually processed BAMs from targeted 
 
 Tumour-only calls still contain rare germline variants that are absent from gnomAD and the panel of normals, so they are not equivalent to paired calls. Do not pool them for TMB or signatures without checking the false-positive rate on your assay. For example, run some paired tumours again as tumour-only and compare.
 
-Other entry points (`mapping`, `markdup`, `recalibration`) stop with an error if the sheet has tumour-only patients.
+On mm39 and RN7, which have no panel of normals or SAGE resources, a sheet with tumour-only patients stops with an error.
 
 **Sample-sheet checks.** The run stops before any job is submitted if:
 

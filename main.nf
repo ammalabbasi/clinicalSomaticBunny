@@ -490,7 +490,7 @@ include { SAVE_CSV_MOSDEPTH } from './Modules/SAVE_CSV/SAVE_CSV_MOSDEPTH'
 
 // Sample-sheet checks and tumour-only routing (feature/clinical-bam).
 // Reads only the sheet (IDs and paths), never a BAM. Tumours without a normal used to vanish silently at
-// normal.cross(tumor); now they are called tumour-only (--first_step variant_calling) or the run stops.
+// normal.cross(tumor); now they are called tumour-only from any entry point (GRCh38/GRCh37), or the run stops.
 def sheetFile = file(params.sample)
 def tumorOnlyPatients = [] as Set
 def cnvkitRefMode = (params.cnvkit_reference == 'flat') ? 'flat' : 'pooled'
@@ -563,9 +563,9 @@ if (sheetFile.exists()) {
     if (nPaired == 0 && pairOnly) {
         log.warn "--tool ${pairOnly.join(',')} will not run: no patient has a matched normal, and these tools need one."
     }
-    if (tumorOnlyPatients && params.first_step != 'variant_calling') {
-        error "${tumorOnlyPatients.size()} patient(s) have a tumour but no normal. Tumour-only calling is supported with " +
-              "--first_step variant_calling (processed BAMs); run those samples separately."
+    if (tumorOnlyPatients && !(params.genome in ['GRCh38', 'GRCh37'])) {
+        error "${tumorOnlyPatients.size()} patient(s) have a tumour but no normal. Tumour-only calling needs " +
+              "--genome GRCh38 or GRCh37 (panel of normals, germline resource, SAGE)."
     }
     if (tumorOnlyPatients) {
         def report = new File("${params.results_dir}/REPORT/tumor_only_patients.txt")
@@ -1133,8 +1133,17 @@ workflow {
             // Collect all normal bams for CNVkit and Delly
             normal.map { patient, meta, bam, bai -> [bam, bai] }.flatten().collect().set { normal_bams }
 
+            // Tumour-only patients (no normal row), as in the variant_calling entry: normal = null maps for
+            // Mutect2, SAGE, mosdepth and CNVkit; Strelka2, MuSE, Conpair, ASCAT, Delly and Manta get pairs only.
+            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
+                [patient:patient, normal:null, tumor:bam, tumor_meta:meta, normal_meta:null]
+            }.set { TUMOR_ONLY_MAP }
+            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
+                [patient:patient, gender:meta.sex, normal:null, tumor:bam, sample:meta.sample]
+            }.set { TUMOR_ONLY_MAP_CN }
+
             if (params.genome in ['GRCh38', 'GRCh37']) {
-                SAGE(RECALIBRATE_out_MAP)
+                SAGE(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
             }
 
             STRELKA(RECALIBRATE_out_MAP, strelka_regions_ch)
@@ -1142,11 +1151,11 @@ workflow {
             
             if (params.genome in ['GRCh38', 'GRCh37']) {
                 CONPAIR(RECALIBRATE_out_MAP)
-                MOSDEPTH(RECALIBRATE_out_MAP)
+                MOSDEPTH(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
             }
 
             GETpileUP(RECALIBRATE_out.pair_recal, chunk, interval_dir_ch).set { GETpileUP_out }
-            MUTECT2_CALLING(RECALIBRATE_out_MAP, chunk, interval_dir_ch).set { MUTECT2_CALLING_out }
+            MUTECT2_CALLING(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP), chunk, interval_dir_ch).set { MUTECT2_CALLING_out }
             MUTECT2_CALLING_out.LearnReadOrientationModel_input.groupTuple(by:0).set { LearnReadOrientationModel_input_pair }
             MUTECT2_CALLING_out.MergeMutectStats_input.groupTuple(by:0).set { MergeMutectStats_input_pair }
             MUTECT2_CALLING_out.MergeVcfs_input.groupTuple(by:0).set { MergeVcfs_input_pair }
@@ -1168,7 +1177,11 @@ workflow {
                 [patient:normal[0], normal:normal[2],tumor:tumor[2], tumor_meta:tumor[1]]
             }.set{ GETpileUP_out_MAP }
 
-            CalculateContamination(GETpileUP_out_MAP).set { CalculateContamination_out }
+            GETpileUP_tumor.filter { it[0] in params.tumor_only_patients }.map { t ->
+                [patient:t[0], normal:null, tumor:t[2], tumor_meta:t[1]]
+            }.set { GETpileUP_tumor_only_MAP }
+
+            CalculateContamination(GETpileUP_out_MAP.mix(GETpileUP_tumor_only_MAP)).set { CalculateContamination_out }
             def vcfChannel = MergeVcfs_out.MUTECT2_vcf
                 .map{ map, vcf ->
                     ["${map.patient}_${map.tumor_meta.sample}", [map, vcf]]
@@ -1257,7 +1270,7 @@ workflow {
 	        } else {
 	            cnvkit_ref_ch = CNVkit_buildcnn(normal_bams).CNVkit_ref_cnn
 	        }
-	        CNVkit(RECALIBRATE_out_MAP_CN, cnvkit_ref_ch).set { CNVkit_out }
+	        CNVkit(RECALIBRATE_out_MAP_CN.mix(TUMOR_ONLY_MAP_CN), cnvkit_ref_ch).set { CNVkit_out }
 	    }
 	
 	    // Delly
