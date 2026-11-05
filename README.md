@@ -304,6 +304,43 @@ nextflow run main.nf -profile tscc_slurm,conda \
 
 Run one assay per run: the target BED and the CNVkit reference are per assay.
 
+<!-- >>> umi -->
+#### UMI consensus instead of MarkDuplicates (`--umi`, FASTQ entry only)
+
+Panels sequenced with unique molecular identifiers (UMIs) can collapse PCR duplicates into one consensus read per molecule. Errors present in only one read of a family are voted out, so low-VAF calls are less often PCR or sequencing errors. With `--umi` and `--first_step mapping`, each sample goes through [fgbio](https://github.com/fulcrumgenomics/fgbio) 3.1.2 (`yml/umi.yml`):
+
+`FastqToBam` (UMI → `RX`) → `bwa-mem2` + `ZipperBams` → `GroupReadsByUmi` → `CallMolecularConsensusReads` (or `CallDuplexConsensusReads`) → re-align consensus (`bwa-mem2` + `ZipperBams`) → `FilterConsensusReads` → BQSR → callers.
+
+MarkDuplicates is skipped because the consensus reads are already one per molecule. Read groups keep `ID:<patient>` and `SM:<patient>_<sample>_<status>`. Paired and tumour-only patients both work. `--umi` is refused at the other entry points, because vendor BAMs are already deduplicated.
+
+How the UMI is delivered differs between vendors. Give exactly one source:
+
+| UMI source | Option | Example |
+|---|---|---|
+| Inline, at the start of the reads | `--umi_read_structure '<R1> <R2>'` ([fgbio read structures](https://github.com/fulcrumgenomics/fgbio/wiki/Read-Structures)) | `'3M2S+T 3M2S+T'` = 3 bp UMI, 2 bp skipped, rest template, on both reads |
+| Separate UMI/index read | `--umi_fastq_column` + sheet column `fastq_umi` | default structures `'+T +T +M'`; override with three structures |
+| In the read name (`@...:ACGTACGT`, BCL Convert style) | `--umi_from_header` | `--umi_read_structure` may still trim, e.g. `'5S+T 5S+T'`, but cannot contain `M` |
+
+| Option | Default | What it does |
+|---|---|---|
+| `--umi_group_strategy` | `adjacency` (`paired` with `--umi_duplex`) | `GroupReadsByUmi --strategy`: `identity`, `edit`, `adjacency` or `paired` |
+| `--umi_edits` | `1` | UMI mismatches allowed within a family |
+| `--umi_min_map_q` | `1` | Reads below this MAPQ are not grouped |
+| `--umi_min_reads` | `1` | Reads needed for a consensus (call and filter). `1` keeps singletons. Duplex takes up to three values, e.g. `'2 1 1'` |
+| `--umi_duplex` | off | Duplex consensus. Needs a UMI on both ends of the molecule (`M` in both read structures, or two UMIs in the UMI read or read name) |
+| `--umi_min_base_quality` | `30` | `FilterConsensusReads`: consensus bases below this become `N`. fgbio's own best practice uses 40–45 with `--umi_min_reads ≥ 2`. At `1`, a high value masks every singleton |
+| `--umi_max_base_error_rate` / `--umi_max_no_call_fraction` | `0.2` / `0.2` | `FilterConsensusReads` base masking and read removal |
+
+Outputs go to `UMI/` (`<patient>_<sample>_<status>.*`):
+
+- `fgbio_group_family_size_histogram.txt` and `fgbio_group_metrics.txt` (MultiQC's fgbio module reads the histogram)
+- `umi_consensus_filter_counts.tsv`: consensus reads in, and kept after filtering
+- `fgbio_duplex_*` (duplex only)
+- `*_umi_consensus.bam` (only with `--publish markdup_bam`)
+
+`--cleanup` does not remove the UMI intermediates. Throughput depends on family sizes. Check the histogram before you trust `--umi_min_reads`.
+<!-- <<< umi -->
+
 ### Advanced Options
 
 #### Publishing Intermediate Files

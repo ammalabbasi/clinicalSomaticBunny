@@ -17,6 +17,81 @@ params.targets = null             // capture BED for --type exome|panel: Mutect2
 params.target_padding = 100       // bp added on each side of --targets
 params.contig_rename = "auto"     // auto: rename b37 <-> chr contigs in BAM headers when lengths match --ref; none: never
 params.cnvkit_reference = "auto"  // auto: pooled from the run's normals, flat if the sheet has none; or pooled | flat
+// >>> umi
+// UMI-aware duplicates (fgbio molecular consensus) for --first_step mapping. Off by default. When on, the
+// consensus BAM replaces BWA_MEM + MarkDuplicates and goes straight to BQSR and the callers.
+// Exactly one UMI source: inline (--umi_read_structure with M segments), a UMI FASTQ (--umi_fastq_column,
+// sheet column fastq_umi) or the read name (--umi_from_header).
+params.umi = false
+params.umi_read_structure = null        // fgbio read structures, one per FASTQ, e.g. "3M2S+T 3M2S+T"
+params.umi_fastq_column = false         // UMI read in sheet column fastq_umi (default structures "+T +T +M")
+params.umi_from_header = false          // UMI = last ':' field of the read name (default structures "+T +T")
+params.umi_group_strategy = null        // identity | edit | adjacency | paired; default adjacency, paired with --umi_duplex
+params.umi_edits = 1                    // UMI mismatches allowed when grouping
+params.umi_min_map_q = 1                // reads below this MAPQ are not grouped
+params.umi_min_reads = 1                // reads per family for a consensus; duplex accepts up to 3 values, e.g. "2 1 1"
+params.umi_duplex = false               // CallDuplexConsensusReads (needs a UMI on both ends of the molecule)
+params.umi_min_base_quality = 30        // FilterConsensusReads: consensus bases below this become N
+params.umi_max_base_error_rate = 0.2    // FilterConsensusReads: mask bases where more reads disagree with consensus
+params.umi_max_no_call_fraction = 0.2   // FilterConsensusReads: drop consensus reads with more Ns than this
+if (params.umi) {
+    if (params.first_step != 'mapping') {
+        error "--umi needs --first_step mapping: UMIs are read from FASTQs (processed BAMs are already deduplicated)."
+    }
+    def seg = /(\d+|\+)[TBMSC]/
+    def structs = params.umi_read_structure ? params.umi_read_structure.toString().trim().split(/\s+/) as List : []
+    def bad = structs.findAll { !(it ==~ /(${seg})+/) }
+    if (bad) error "--umi_read_structure: not an fgbio read structure: ${bad.join(' ')} (e.g. 3M2S+T 3M2S+T)"
+    def nM = { String s -> (s =~ /(\d+|\+)M/).size() }
+    def inline = structs && structs.any { nM(it) > 0 } && !params.umi_fastq_column
+    def sources = [inline ? 'inline' : null, params.umi_fastq_column ? 'fastq' : null, params.umi_from_header ? 'header' : null].findAll()
+    if (sources.size() != 1) {
+        error "--umi needs exactly one UMI source: --umi_read_structure with M segments (inline UMI), " +
+              "--umi_fastq_column (sheet column fastq_umi) or --umi_from_header. Got: ${sources ?: 'none'}"
+    }
+    def src = sources[0]
+    if (src == 'fastq') {
+        structs = structs ?: ['+T', '+T', '+M']
+        if (structs.size() != 3 || nM(structs[2]) == 0) {
+            error "--umi_fastq_column: give three read structures (R1 R2 UMI-read) with M in the third, e.g. '+T +T +M'"
+        }
+        def hdr = file(params.sample).exists() ? file(params.sample).readLines()[0].split(',').collect { it.trim() } : []
+        if (!('fastq_umi' in hdr)) error "--umi_fastq_column: sample sheet ${params.sample} has no fastq_umi column"
+    } else if (src == 'header') {
+        structs = structs ?: ['+T', '+T']
+        if (structs.size() != 2 || structs.any { nM(it) > 0 }) {
+            error "--umi_from_header: --umi_read_structure may only trim (two structures, no M), e.g. '5S+T 5S+T'"
+        }
+    } else if (structs.size() != 2) {
+        error "--umi_read_structure needs one structure per FASTQ (two), e.g. '3M2S+T 3M2S+T'"
+    }
+    def strategy = params.umi_group_strategy ?: (params.umi_duplex ? 'paired' : 'adjacency')
+    if (!(strategy in ['identity', 'edit', 'adjacency', 'paired'])) {
+        error "--umi_group_strategy must be identity, edit, adjacency or paired"
+    }
+    def minReads = params.umi_min_reads.toString().trim().split(/\s+/) as List
+    if (!minReads.every { it ==~ /\d+/ } || minReads.size() > (params.umi_duplex ? 3 : 1)) {
+        error "--umi_min_reads: one integer (simplex) or up to three for --umi_duplex, e.g. '2 1 1'"
+    }
+    if (params.umi_duplex) {
+        if (strategy != 'paired') error "--umi_duplex needs --umi_group_strategy paired (the default with --umi_duplex)"
+        if (src == 'inline' && !structs.every { nM(it) > 0 }) {
+            error "--umi_duplex: duplex consensus needs a UMI on both reads (M in both read structures)"
+        }
+        if (src == 'fastq' && structs.sum { nM(it) } < 2) {
+            error "--umi_duplex: the UMI read structures carry one UMI; duplex needs two (e.g. '+T +T 8M8M')"
+        }
+        if (src == 'header') log.warn "--umi_duplex with --umi_from_header: read names must carry two UMIs (e.g. ACGT+TTGA)"
+    } else if (strategy == 'paired') {
+        log.warn "--umi_group_strategy paired groups both strands of a molecule; consensus is still simplex (add --umi_duplex for duplex)"
+    }
+    params.umi_source = src
+    params.umi_read_structures_resolved = structs.join(' ')
+    params.umi_group_strategy_resolved = strategy
+    log.info "UMI consensus: source ${src}, read structures '${structs.join(' ')}', ${strategy} grouping " +
+             "(edits ${params.umi_edits}), ${params.umi_duplex ? 'duplex' : 'simplex'} consensus, min reads ${minReads.join(' ')}; MarkDuplicates is skipped"
+}
+// <<< umi
 params.results_dir = params.outdir ?: "$projectDir/RESULTS"
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 new File(params.log_file).absoluteFile.parentFile.mkdirs()
@@ -385,6 +460,10 @@ params.gatk_env = "${projectDir}/yml/gatk_runtime.yml"
 params.POST_env = "${projectDir}/yml/POST.yml"
 params.POST_rename_env = "${projectDir}/yml/POST_rename.yml"
 params.gatk = "${params.database_path}/gatk-4.6.2.0/gatk"
+// >>> umi
+params.umi_dir = "${params.results_dir}/UMI"
+params.umi_env = "${projectDir}/yml/umi.yml"
+// <<< umi
 
 // Write configuration to log file
 writeToLog(params.log_file, configInfo)
@@ -487,6 +566,15 @@ include { SAVE_CSV_MuSE } from './Modules/SAVE_CSV/SAVE_CSV_MuSE'
 include { SAVE_CSV_Mutect2 } from './Modules/SAVE_CSV/SAVE_CSV_Mutect2'
 include { SAVE_CSV_CONPAIR } from './Modules/SAVE_CSV/SAVE_CSV_CONPAIR'
 include { SAVE_CSV_MOSDEPTH } from './Modules/SAVE_CSV/SAVE_CSV_MOSDEPTH'
+// >>> umi
+include { UMI_FASTQ_TO_BAM } from './Modules/UMI/UMI_FASTQ_TO_BAM'
+include { UMI_ALIGN as UMI_ALIGN_RAW } from './Modules/UMI/UMI_ALIGN'
+include { UMI_ALIGN as UMI_ALIGN_CONSENSUS } from './Modules/UMI/UMI_ALIGN'
+include { UMI_GROUP } from './Modules/UMI/UMI_GROUP'
+include { UMI_CONSENSUS } from './Modules/UMI/UMI_CONSENSUS'
+include { CHECK_BAM_MKDUP as CHECK_BAM_UMI } from './Modules/CHECK_BAM_MKDUP'
+include { COMBINE_REPORTS_MKDUP as COMBINE_REPORTS_UMI } from './Modules/COMBINE_REPORTS_MKDUP'
+// <<< umi
 
 // Sample-sheet checks and tumour-only routing (feature/clinical-bam).
 // Reads only the sheet (IDs and paths), never a BAM. Tumours without a normal used to vanish silently at
@@ -692,6 +780,32 @@ workflow {
             } | set { sample_sheet }
         }
         FASTQC(sample_sheet)
+        // >>> umi
+        // FASTQ -> uBAM (UMI in RX) -> bwa-mem2 + ZipperBams -> GroupReadsByUmi -> consensus -> re-align +
+        // FilterConsensusReads. The consensus BAM stands in for MKDUP_out below; BWA_MEM, MKDUP and their checks
+        // get an empty channel and do not run.
+        if (params.umi) {
+            def umiFastq = [:]
+            if (params.umi_source == 'fastq') {
+                def rows = file(params.sample).readLines().findAll { it.trim() }
+                def h = rows[0].split(',').collect { it.trim() }
+                rows.drop(1).each { line ->
+                    def f = line.split(',', -1)
+                    umiFastq["${f[h.indexOf('patient')]}|${f[h.indexOf('sample')]}|${f[h.indexOf('status')]}"] = f[h.indexOf('fastq_umi')]
+                }
+                def missingUmi = umiFastq.findAll { !it.value }.keySet()
+                if (missingUmi) error "--umi_fastq_column: empty fastq_umi for ${missingUmi.join(', ')}"
+            }
+            UMI_FASTQ_TO_BAM(sample_sheet.map { meta -> [meta, umiFastq["${meta.patient}|${meta.sample}|${meta.status}"] ?: ''] })
+            UMI_ALIGN_RAW(UMI_FASTQ_TO_BAM.out.ubam, 'raw')
+            UMI_GROUP(UMI_ALIGN_RAW.out.raw)
+            UMI_CONSENSUS(UMI_GROUP.out.grouped)
+            UMI_ALIGN_CONSENSUS(UMI_CONSENSUS.out.ubam, 'consensus')
+            CHECK_BAM_UMI(UMI_ALIGN_CONSENSUS.out.mkdup_bam)
+            COMBINE_REPORTS_UMI(CHECK_BAM_UMI.out.individual_reports_mkdup.collect())
+            sample_sheet = Channel.empty()
+        }
+        // <<< umi
         BWA_MEM(sample_sheet).set { BWA_MEM_out }
         CHECK_BAM_BWA(BWA_MEM_out.bam).set{ CHECK_BAM_BWA_out }
         COMBINE_REPORTS_BWA(CHECK_BAM_BWA_out.individual_reports_bwa.collect())
@@ -752,6 +866,11 @@ workflow {
             CHECK_BAM_MKDUP(MKDUP_out.mkdup_bam).set{ CHECK_BAM_MKDUP_out }
             COMBINE_REPORTS_MKDUP(CHECK_BAM_MKDUP_out.individual_reports_mkdup.collect())
         }
+        // >>> umi
+        if (params.umi) {
+            MKDUP_out = UMI_ALIGN_CONSENSUS.out   // same emits as MKDUP: pair_mutect, mkdup_bam, cleanup_trigger
+        }
+        // <<< umi
 
         if (params.genome in ['mm39', 'RN7']){
             MKDUP_out.pair_mutect.filter{it[1].status == 'normal'}.set{normal}
