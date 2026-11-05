@@ -4,7 +4,7 @@ nextflow.enable.dsl=2
 // (tumour-only, PON + gnomAD) and SAGE (tumour-only) run. Keep variants that PASS in both, and soft-flag
 // likely germline sites by population frequency (Mutect2 POPAF = -log10 AF; POPAF < 3 means AF > 0.001).
 process POST_TUMOR_ONLY {
-    conda "${params.POST_rename_env}"
+    conda "${params.bcftools_env}"
     scratch true
     label 'process_low'
     publishDir("${params.post_dir}/tumor_only/${patient_sample}", mode: 'copy')

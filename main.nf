@@ -688,6 +688,7 @@ params.bwamem2_env = "$projectDir/yml/bwamem2.yml"
 params.mkdup_env = "$projectDir/yml/picard.yml"
 params.conpair_env = "$projectDir/yml/conpair.yml"
 params.samtools_env = "$projectDir/yml/samtools.yml"
+params.bcftools_env = "$projectDir/yml/bcftools.yml"   // clinical: POST_TUMOR_ONLY (upstream removed POST_rename.yml)
 params.strelka_env = "$projectDir/yml/strelka_env.yml"
 params.mosdepth_env = "$projectDir/yml/mosdepth_env.yml"
 params.rename_bam_env = "$projectDir/yml/rename_bam.yml"
