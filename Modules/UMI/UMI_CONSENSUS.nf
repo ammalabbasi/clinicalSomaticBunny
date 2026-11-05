@@ -18,7 +18,7 @@ process UMI_CONSENSUS {
 
     output:
     tuple val(meta), path("*_umi_consensus_unmapped.bam"), emit: ubam
-    path("*.fgbio_duplex_*"), emit: duplex_metrics, optional: true
+    path("*.fgbio_duplex.*"), emit: duplex_metrics, optional: true
 
     script:
     def id = "${meta.patient}_${meta.sample}_${meta.status}"

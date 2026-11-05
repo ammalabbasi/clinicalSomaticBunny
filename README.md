@@ -335,10 +335,17 @@ Outputs go to `UMI/` (`<patient>_<sample>_<status>.*`):
 
 - `fgbio_group_family_size_histogram.txt` and `fgbio_group_metrics.txt` (MultiQC's fgbio module reads the histogram)
 - `umi_consensus_filter_counts.tsv`: consensus reads in, and kept after filtering
-- `fgbio_duplex_*` (duplex only)
+- `fgbio_duplex.*` (duplex only: CollectDuplexSeqMetrics family sizes, duplex yield, UMI counts)
 - `*_umi_consensus.bam` (only with `--publish markdup_bam`)
 
 `--cleanup` does not remove the UMI intermediates. Throughput depends on family sizes. Check the histogram before you trust `--umi_min_reads`.
+
+Synthetic check (simulated reads from a public GRCh38 window; panel of 40 × 250 bp; family sizes 1–8; per-read errors at 15 hotspots, 4 % of reads each; five SNVs at 2–3 % VAF per tumour). The same reads were run with and without `--umi`:
+
+- **Families:** fgbio recovered 120,010 families from 120,000 simulated molecules.
+- **Paired, Strelka2:** error-hotspot false positives fell from 12/15 to 0/15. Low-VAF SNVs found went from 3/5 to 4/5.
+- **Paired, POST consensus:** hotspot false positives fell from 6 to 0. Low-VAF SNVs found went from 0/5 to 4/5.
+- **Tumour-only, Mutect2:** low-VAF SNVs found went from 0/5 to 5/5.
 <!-- <<< umi -->
 
 ### Advanced Options
