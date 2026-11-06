@@ -45,9 +45,15 @@ process PURECN_SNPS {
     bcftools query -f '%CHROM\\t%POS\\t%REF,%ALT\\n' somatic_sites.vcf.gz > somatic.alleles.tsv
     echo "Mutect2 PASS SNVs: \$(wc -l < somatic.alleles.tsv)"
 
-    # Sites to count: gnomAD sites not at a somatic position, plus the somatic SNVs (their own alleles)
-    { bgzip -dc ${alleles_tsv} | awk -F'\\t' 'NR==FNR { s[\$1":"\$2]=1; next } !((\$1":"\$2) in s)' somatic.alleles.tsv -
-      cat somatic.alleles.tsv; } | sort -k1,1 -k2,2n -u > alleles.tsv
+    # Sites to count: gnomAD sites not at a somatic position, plus the somatic SNVs (their own alleles).
+    # A tumour can have ZERO PASS SNVs (seen with a zero-mutation edge-case pair): awk with an empty first
+    # file never leaves NR==FNR mode and would swallow the whole gnomAD list, so branch on emptiness.
+    if [ -s somatic.alleles.tsv ]; then
+        { bgzip -dc ${alleles_tsv} | awk -F'\\t' 'NR==FNR { s[\$1":"\$2]=1; next } !((\$1":"\$2) in s)' somatic.alleles.tsv -
+          cat somatic.alleles.tsv; } | sort -k1,1 -k2,2n -u > alleles.tsv
+    else
+        bgzip -dc ${alleles_tsv} | sort -k1,1 -k2,2n -u > alleles.tsv
+    fi
     bgzip -f alleles.tsv
     tabix -f -s1 -b2 -e2 alleles.tsv.gz
     bgzip -dc alleles.tsv.gz | cut -f1,2 > positions.tsv
