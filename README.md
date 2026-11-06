@@ -6,6 +6,14 @@
 
 <br clear="left"/>
 
+## Clinical SomaticBunny at a glance
+
+This branch adapts SomaticBunny to clinical panel sequencing — vendor-processed BAMs or FASTQs, with or without a matched normal. Purple steps are new on this branch, blue steps are original SomaticBunny reused or adapted, and grey steps are original steps not used for clinical data. Every validation number in this README comes from simulated reads on public GRCh38; no patient data was used.
+
+![Clinical SomaticBunny workflow](docs/clinical_somaticbunny_workflow.svg)
+
+A slide-ready PNG and PDF of the same figure live in [`docs/`](docs/).
+
 
 ## Table of Contents
 - [Overview](#overview)

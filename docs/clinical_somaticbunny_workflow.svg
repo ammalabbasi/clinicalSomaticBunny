@@ -1,0 +1,220 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1184" width="1440" height="1184" role="img" aria-label="Clinical SomaticBunny workflow" font-family="Arial,Helvetica,sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M1,1 L9,5 L1,9" fill="none" stroke="#a6b2ba" stroke-width="1.6"/>
+    </marker>
+    <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M1,1 L9,5 L1,9" fill="none" stroke="#c6cdd2" stroke-width="1.6"/>
+    </marker>
+  </defs>
+  <rect width="1440" height="1184" fill="#ffffff"/>
+
+  <!-- 0  FASTQ entry (original steps, used for clinical FASTQs) -->
+  <rect x="64" y="16" width="1312" height="92" rx="13" fill="#fdfdfc" stroke="#d2dadd" stroke-width="1.2"/>
+  <text x="88" y="54" font-size="22" font-weight="700" fill="#5b90ad">0</text>
+  <text x="118" y="54" font-size="21" font-weight="700" fill="#253844">FASTQ entry</text>
+  <text x="118" y="82" font-size="16" fill="#526775">clinical FASTQs, paired or tumour-only</text>
+  <g font-size="17" font-weight="700" fill="#3e6f8c" text-anchor="middle">
+    <rect x="560" y="42" width="105" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/>
+    <text x="612" y="67">FASTQC</text>
+    <rect x="695" y="42" width="140" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/>
+    <text x="765" y="67" fill="#7a4f98">fgbio UMI</text>
+    <rect x="865" y="42" width="125" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/>
+    <text x="927" y="67">BWA-MEM2</text>
+    <rect x="1020" y="42" width="160" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/>
+    <text x="1100" y="67">MarkDuplicates</text>
+    <rect x="1210" y="42" width="80" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/>
+    <text x="1250" y="67">BQSR</text>
+  </g>
+  <g stroke="#a6b2ba" stroke-width="1.6" fill="none" marker-end="url(#arr)">
+    <path d="M667 61 H692"/><path d="M837 61 H862"/><path d="M992 61 H1017"/><path d="M1182 61 H1207"/>
+  </g>
+  <!-- FASTQ route joins the split into both calling lanes, down the left margin -->
+  <path d="M64 62 H40 V567 H384" fill="none" stroke="#a6b2ba" stroke-width="1.6"/>
+
+  <!-- 1  Clinical inputs and startup checks -->
+  <rect x="64" y="128" width="1312" height="176" rx="13" fill="#fdfdfc" stroke="#d2dadd" stroke-width="1.2"/>
+  <text x="88" y="168" font-size="25" font-weight="700" fill="#9366af">1</text>
+  <text x="118" y="168" font-size="25" font-weight="700" fill="#253844">Clinical inputs and startup checks</text>
+
+  <!-- A sample sheet -->
+  <path d="M92 204 h26 l12 12 v46 h-38 z" fill="#f4f7f9" stroke="#5b90ad" stroke-width="2"/>
+  <path d="M118 204 v12 h12" fill="none" stroke="#5b90ad" stroke-width="2"/>
+  <g stroke="#5b90ad" stroke-width="1.6"><path d="M99 228 h24"/><path d="M99 237 h24"/><path d="M99 246 h16"/></g>
+  <text x="142" y="224" font-size="19" font-weight="700" fill="#253844">Sample sheet</text>
+  <text x="142" y="250" font-size="15" fill="#526775">patient, sample, status</text>
+  <text x="142" y="273" font-size="15" fill="#526775">BAM or FASTQ; tumour-only ok</text>
+  <path d="M410 236 H432" stroke="#a6b2ba" stroke-width="1.6" fill="none" marker-end="url(#arr)"/>
+
+  <!-- B processed BAMs -->
+  <g stroke-width="3.2" stroke-linecap="round">
+    <path d="M442 208 H488" stroke="#5b90ad"/><path d="M452 219 H488" stroke="#9366af"/>
+    <path d="M442 230 H478" stroke="#5b90ad"/><path d="M448 241 H488" stroke="#5b90ad"/>
+    <path d="M442 252 H482" stroke="#9366af"/>
+  </g>
+  <text x="500" y="224" font-size="19" font-weight="700" fill="#253844">Processed vendor BAMs</text>
+  <text x="500" y="250" font-size="15" fill="#526775">b37 or chr contig names</text>
+  <text x="500" y="273" font-size="15" fill="#526775">enter at variant_calling</text>
+  <path d="M784 236 H806" stroke="#a6b2ba" stroke-width="1.6" fill="none" marker-end="url(#arr)"/>
+
+  <!-- C capture targets -->
+  <path d="M814 240 H866" stroke="#a6b2ba" stroke-width="2"/>
+  <rect x="818" y="230" width="9" height="20" rx="1.5" fill="#9366af"/>
+  <rect x="835" y="230" width="13" height="20" rx="1.5" fill="#9366af"/>
+  <rect x="856" y="230" width="7" height="20" rx="1.5" fill="#9366af"/>
+  <g fill="#9ebccf"><rect x="818" y="212" width="9" height="12"/><rect x="835" y="206" width="13" height="18"/><rect x="856" y="214" width="7" height="10"/></g>
+  <text x="878" y="224" font-size="19" font-weight="700" fill="#253844">Capture targets</text>
+  <text x="878" y="250" font-size="15" fill="#526775">--targets BED, or</text>
+  <text x="878" y="273" font-size="15" fill="#526775">inferred from coverage</text>
+  <path d="M1084 236 H1100" stroke="#a6b2ba" stroke-width="1.6" fill="none" marker-end="url(#arr)"/>
+
+  <!-- D startup checks -->
+  <rect x="1106" y="194" width="258" height="94" rx="10" fill="#f4eefa" stroke="#bea3d2" stroke-width="1.2"/>
+  <path d="M1116 214 h30 l-11 15 v18 l-8 6 v-24 z" fill="#ffffff" stroke="#9366af" stroke-width="2" stroke-linejoin="round"/>
+  <text x="1156" y="224" font-size="19" font-weight="700" fill="#253844">Startup checks</text>
+  <text x="1156" y="250" font-size="15" fill="#526775">sheet, type, contigs</text>
+  <text x="1156" y="273" font-size="15" fill="#526775">→ paired, tumour-only</text>
+
+  <!-- 2  BAM harmonisation and target intervals -->
+  <rect x="64" y="322" width="1312" height="236" rx="13" fill="#fdfdfc" stroke="#d2dadd" stroke-width="1.2"/>
+  <text x="88" y="360" font-size="25" font-weight="700" fill="#9366af">2</text>
+  <text x="118" y="360" font-size="25" font-weight="700" fill="#253844">BAM harmonisation, targets and per-assay resources</text>
+
+  <rect x="84" y="376" width="620" height="106" rx="10" fill="#edf5f9" stroke="#99b5c8" stroke-width="1.2"/>
+  <g font-size="15" font-weight="700" text-anchor="middle">
+    <rect x="98" y="398" width="44" height="28" rx="4" fill="#ffffff" stroke="#5b90ad"/>
+    <text x="120" y="417" fill="#3e6f8c">17</text>
+    <rect x="172" y="398" width="64" height="28" rx="4" fill="#ffffff" stroke="#5b90ad"/>
+    <text x="204" y="417" fill="#3e6f8c">chr17</text>
+  </g>
+  <path d="M145 412 H168" stroke="#5b90ad" stroke-width="1.6" fill="none"/>
+  <path d="M163 407 L169 412 L163 417" stroke="#5b90ad" stroke-width="1.6" fill="none"/>
+  <text x="256" y="402" font-size="19" font-weight="700" fill="#253844">RENAME_BAM_HEADER</text>
+  <rect x="508" y="386" width="72" height="20" rx="10" fill="#ffffff" stroke="#5b90ad"/>
+  <text x="544" y="400" font-size="11" font-weight="700" fill="#3e6f8c" text-anchor="middle" letter-spacing="1">ADAPTED</text>
+  <text x="256" y="427" font-size="15" fill="#526775">contig rename b37 ↔ chr when lengths match</text>
+  <text x="256" y="449" font-size="15" fill="#526775">name, length and order checked against --ref</text>
+  <text x="256" y="471" font-size="15" fill="#526775">inputs staged apart; originals untouched</text>
+
+  <rect x="724" y="376" width="640" height="106" rx="10" fill="#f4eefa" stroke="#bea3d2" stroke-width="1.2"/>
+  <path d="M740 414 H828" stroke="#a6b2ba" stroke-width="2"/>
+  <rect x="748" y="404" width="30" height="20" rx="2" fill="#eee6f5" stroke="#bea3d2"/>
+  <rect x="756" y="404" width="14" height="20" rx="1.5" fill="#9366af"/>
+  <rect x="790" y="404" width="30" height="20" rx="2" fill="#eee6f5" stroke="#bea3d2"/>
+  <rect x="798" y="404" width="14" height="20" rx="1.5" fill="#9366af"/>
+  <text x="846" y="402" font-size="19" font-weight="700" fill="#253844">PREPARE_TARGETS</text>
+  <rect x="1060" y="386" width="46" height="20" rx="10" fill="#ffffff" stroke="#9366af"/>
+  <text x="1083" y="400" font-size="11" font-weight="700" fill="#7a4f98" text-anchor="middle" letter-spacing="1">NEW</text>
+  <text x="846" y="427" font-size="15" fill="#526775">pad ±100 bp, merge → Strelka2 call regions</text>
+  <text x="846" y="449" font-size="15" fill="#526775">20 interval shards → Mutect2, pileups</text>
+  <text x="846" y="471" font-size="15" fill="#526775">clean BED → mosdepth, CNVkit, BQSR</text>
+
+
+  <!-- per-assay resources, built once from the cohort's normals -->
+  <text x="96" y="526" font-size="15" font-weight="700" fill="#253844">Built once per assay from the cohort's normals:</text>
+  <g font-size="17" font-weight="700" text-anchor="middle">
+    <rect x="548" y="500" width="214" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="655" y="525" fill="#3e6f8c">CNVkit reference</text>
+    <rect x="776" y="500" width="214" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="883" y="525" fill="#7a4f98">PureCN normal DB</text>
+    <rect x="1004" y="500" width="246" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1127" y="525" fill="#7a4f98">Mutect2 cohort PON</text>
+  </g>
+  <!-- split to lanes -->
+  <g stroke="#a6b2ba" stroke-width="1.6" fill="none">
+    <path d="M720 558 V567 H384 V575" marker-end="url(#arr)"/>
+    <path d="M720 567 H1056 V575" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- 3  Paired calling -->
+  <rect x="64" y="578" width="640" height="316" rx="13" fill="#fdfdfc" stroke="#d2dadd" stroke-width="1.2"/>
+  <text x="88" y="616" font-size="25" font-weight="700" fill="#5b90ad">3</text>
+  <text x="118" y="616" font-size="25" font-weight="700" fill="#253844">Paired tumour–normal calling</text>
+  <text x="96" y="654" font-size="18" font-weight="700" fill="#253844">Somatic callers</text>
+  <g font-size="19" font-weight="700" fill="#3e6f8c" text-anchor="middle">
+    <rect x="96" y="666" width="136" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="164" y="692">Mutect2</text>
+    <rect x="246" y="666" width="136" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="314" y="692">Strelka2</text>
+    <rect x="396" y="666" width="136" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="464" y="692">MuSE</text>
+    <rect x="546" y="666" width="136" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="614" y="692">SAGE</text>
+  </g>
+  <text x="96" y="730" font-size="15" fill="#526775">adapted: Strelka2 call regions, panel contamination fallback</text>
+  <text x="96" y="766" font-size="18" font-weight="700" fill="#253844">QC and copy number</text>
+  <g font-size="18" font-weight="700" fill="#3e6f8c" text-anchor="middle">
+    <rect x="96" y="778" width="120" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="156" y="803">Conpair</text>
+    <rect x="230" y="778" width="130" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="295" y="803">mosdepth</text>
+    <rect x="374" y="778" width="206" height="38" rx="5" fill="#edf3f7" stroke="#5b90ad"/><text x="477" y="803">CNVkit (pooled)</text>
+    <rect x="594" y="778" width="96" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="642" y="803" fill="#7a4f98">PureCN</text>
+  </g>
+  <g font-size="17" font-weight="700" fill="#a3adb4" text-anchor="middle">
+    <rect x="96" y="830" width="100" height="38" rx="5" fill="#f1f3f4" stroke="#c6cdd2" stroke-dasharray="5 4"/><text x="146" y="855">ASCAT</text>
+    <rect x="210" y="830" width="90" height="38" rx="5" fill="#f1f3f4" stroke="#c6cdd2" stroke-dasharray="5 4"/><text x="255" y="855">Delly</text>
+    <rect x="314" y="830" width="100" height="38" rx="5" fill="#f1f3f4" stroke="#c6cdd2" stroke-dasharray="5 4"/><text x="364" y="855">Manta</text>
+  </g>
+  <text x="430" y="855" font-size="15" fill="#9aa5ad">genome-wide; off for panels</text>
+
+  <!-- 4  Tumour-only calling -->
+  <rect x="736" y="578" width="640" height="316" rx="13" fill="#fdfdfc" stroke="#d2dadd" stroke-width="1.2"/>
+  <text x="760" y="616" font-size="25" font-weight="700" fill="#9366af">4</text>
+  <text x="790" y="616" font-size="25" font-weight="700" fill="#253844">Tumour-only calling</text>
+  <rect x="1134" y="598" width="46" height="20" rx="10" fill="#ffffff" stroke="#9366af"/>
+  <text x="1157" y="612" font-size="11" font-weight="700" fill="#7a4f98" text-anchor="middle" letter-spacing="1">NEW</text>
+  <text x="768" y="654" font-size="18" font-weight="700" fill="#253844">Somatic callers</text>
+  <g font-size="19" font-weight="700" fill="#7a4f98" text-anchor="middle">
+    <rect x="768" y="666" width="276" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="906" y="692">Mutect2 tumour-only</text>
+    <rect x="1058" y="666" width="244" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1180" y="692">SAGE tumour-only</text>
+  </g>
+  <text x="768" y="730" font-size="15" fill="#526775">Mutect2 with panel of normals + gnomAD; SAGE without -reference</text>
+  <text x="768" y="766" font-size="18" font-weight="700" fill="#253844">QC and copy number</text>
+  <g font-size="18" font-weight="700" fill="#7a4f98" text-anchor="middle">
+    <rect x="768" y="778" width="130" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="833" y="803">mosdepth</text>
+    <rect x="912" y="778" width="300" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1062" y="803">CNVkit (flat or pooled)</text>
+    <rect x="1226" y="778" width="110" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1281" y="803">PureCN</text>
+  </g>
+  <rect x="768" y="830" width="576" height="38" rx="5" fill="#f1f3f4" stroke="#c6cdd2" stroke-dasharray="5 4"/>
+  <text x="784" y="855" font-size="15" font-weight="700" fill="#a3adb4">Need a normal: Strelka2 · MuSE · Conpair · ASCAT · Delly · Manta</text>
+
+  <!-- to consensus -->
+  <g stroke="#a6b2ba" stroke-width="1.6" fill="none" marker-end="url(#arr)">
+    <path d="M384 894 V918"/><path d="M1056 894 V918"/>
+  </g>
+
+  <!-- 5  Consensus calls and reports -->
+  <rect x="64" y="922" width="1312" height="208" rx="13" fill="#fdfdfc" stroke="#d2dadd" stroke-width="1.2"/>
+  <text x="88" y="960" font-size="25" font-weight="700" fill="#9366af">5</text>
+  <text x="118" y="960" font-size="25" font-weight="700" fill="#253844">Consensus calls, biomarkers and reports</text>
+
+  <rect x="84" y="976" width="440" height="84" rx="10" fill="#edf5f9" stroke="#99b5c8" stroke-width="1.2"/>
+  <text x="100" y="1002" font-size="19" font-weight="700" fill="#253844">Paired: POST_SCENARIOS (upstream)</text>
+  <text x="100" y="1026" font-size="16" fill="#526775">scenarios 1–6 · final VCF + commands</text>
+  <text x="100" y="1048" font-size="16" fill="#526775">no-consensus report · AlleleCounter VAF</text>
+
+  <rect x="544" y="976" width="452" height="84" rx="10" fill="#f4eefa" stroke="#bea3d2" stroke-width="1.2"/>
+  <text x="560" y="1002" font-size="19" font-weight="700" fill="#253844">Tumour-only consensus</text>
+  <text x="560" y="1026" font-size="16" fill="#526775">PASS in both Mutect2 and SAGE</text>
+  <text x="560" y="1048" font-size="16" fill="#526775">germline_popaf if population AF &gt; 0.1%</text>
+
+  <path d="M1020 990 h22 l10 10 v40 h-32 z" fill="#f4f7f9" stroke="#5b90ad" stroke-width="1.8"/>
+  <path d="M1042 990 v10 h10" fill="none" stroke="#5b90ad" stroke-width="1.8"/>
+  <path d="M1058 996 h22 l10 10 v40 h-32 z" fill="#f8f4fb" stroke="#9366af" stroke-width="1.8"/>
+  <path d="M1080 996 v10 h10" fill="none" stroke="#9366af" stroke-width="1.8"/>
+  <text x="1104" y="1002" font-size="19" font-weight="700" fill="#253844">--outdir</text>
+  <text x="1104" y="1026" font-size="16" fill="#526775">VCFs, CNVkit, PureCN</text>
+  <text x="1104" y="1048" font-size="16" fill="#526775">purity, ploidy, LOH</text>
+
+
+  <!-- biomarkers and QC -->
+  <g font-size="17" font-weight="700" fill="#7a4f98" text-anchor="middle">
+    <rect x="96" y="1068" width="180" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="186" y="1093">VEP + vcf2maf</text>
+    <rect x="290" y="1068" width="120" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="350" y="1093">TMB / Mb</text>
+    <rect x="424" y="1068" width="250" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="549" y="1093">MSI (MSIsensor-pro)</text>
+    <rect x="688" y="1068" width="228" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="802" y="1093">somalier identity</text>
+    <rect x="930" y="1068" width="192" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1026" y="1093">MultiQC report</text>
+  </g>
+  <rect x="1136" y="1068" width="170" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1221" y="1093" font-size="17" font-weight="700" fill="#7a4f98" text-anchor="middle">PCGR report</text>
+  <!-- legend -->
+  <g font-size="16" fill="#526775">
+    <rect x="64" y="1148" width="26" height="18" rx="4" fill="#eee6f5" stroke="#9366af"/>
+    <text x="100" y="1163">New in Clinical SomaticBunny</text>
+    <rect x="390" y="1148" width="26" height="18" rx="4" fill="#edf3f7" stroke="#5b90ad"/>
+    <text x="426" y="1163">Original step used for clinical data (some adapted)</text>
+    <rect x="860" y="1148" width="26" height="18" rx="4" fill="#f1f3f4" stroke="#c6cdd2" stroke-dasharray="5 4"/>
+    <text x="896" y="1163">Original step not used for clinical data</text>
+  </g>
+</svg>
