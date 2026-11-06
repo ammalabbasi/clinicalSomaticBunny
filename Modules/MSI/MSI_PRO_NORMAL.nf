@@ -20,6 +20,8 @@ process MSI_PRO_NORMAL {
     """
     set -euo pipefail
     msisensor-pro pro -d ${sites} -t ${bam} -g ${params.ref} -c ${params.msi_min_coverage} -b ${task.cpus} -o ${id}
-    test -s ${id}_all
+    # A header-only output means msisensor-pro silently produced nothing (seen once on a bad node:
+    # exit 0, "0 secs", header only) and would poison the baseline's support counts. Require data rows.
+    [ "\$(wc -l < ${id}_all)" -ge 2 ] || { echo "ERROR: ${id}_all has no data rows" >&2; exit 1; }
     """
 }
