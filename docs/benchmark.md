@@ -32,4 +32,4 @@ in tumour-only mode this pipeline leaked 0/15 planted germline SNPs vs sarek's 8
 
 ## Benchmark
 
-Code to reproduce the benchmark against nf-core/sarek is in [`benchmark/`](benchmark).
+Code to reproduce the upstream benchmark against nf-core/sarek is in [`Benchmark/`](../Benchmark); the clinical synthetic comparison lives outside the repo (simulated data only).

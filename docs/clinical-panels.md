@@ -70,9 +70,9 @@ TMB = eligible somatic variants / callable Mb, per tumour, for pairs and tumour-
 
 - **Callable territory**: bases of `--tmb_regions` (default: the cleaned `--targets`; pass a coding-exon BED to count coding territory only) where the tumour has depth ≥ `--tmb_min_depth` and, for pairs, the matched normal has depth ≥ `--tmb_min_normal_depth`. Depth comes from `mosdepth --quantize` with reads of MAPQ ≥ `--tmb_min_mapq` that are not duplicate, secondary, supplementary or QC-failed.
 - **Eligible variants**: PASS SNVs, MNVs and indels (one per ALT allele) whose VCF `POS` (the anchor base for indels) is callable and whose tumour VAF, recomputed from the tumour BAM (MAPQ ≥ `--tmb_min_mapq`, base quality ≥ `--tmb_min_baseq`), is ≥ `--tmb_min_vaf`.
-  - Pairs count the POST consensus of `--tmb_scenario` (default 4). All four standard VCFs (scenarios 3–6) are written by `MERGE_HEADER`, but scenario 3 does not gate on PASS. Scenario 4 is the 2-of-4 SNV / 2-of-3 indel consensus with the PASS gate. Scenarios 5 and 6 also prefilter each caller on PASS and run the DKFZ bias filter, and 6 adds TLOD ≥ 10 / SomaticEVS ≥ 13. All of them keep the same records as `POST/standard_vcf/*_scenario_N_standard_PASSed.vcf`.
+  - Pairs count the POST consensus of `--tmb_scenario` (default 4). All six consensus VCFs are written by `POST_SCENARIOS`; scenario 3 does not gate on PASS. Scenario 4 is the 2-of-4 SNV / 2-of-3 indel consensus with at least one PASS caller. Scenarios 5 and 6 require PASS in every contributing caller and run the DKFZ bias filter, and 6 adds TLOD ≥ 10 / SomaticEVS ≥ 13. The records are those of `POST/<patient>_<sample>/scenario_N/<id>_final.vcf` (sorted/indexed as `<id>_final.vcf.gz`).
   - Tumour-only patients count `POST/tumor_only/*_tumor_only_consensus.PASS.vcf.gz`. Optionally, `--tmb_germline_calls <dir>` holding PureCN `<patient>_<sample>_variants.csv` files drops variants with `POSTERIOR.SOMATIC` < `--tmb_min_somatic_posterior` (0.5). Variants that PureCN did not assess are kept.
-  - `--tmb_coding_only` counts only coding consequences, and only when the VCF carries a VEP `CSQ` or SnpEff `ANN` annotation. The standard consensus VCFs are not annotated, so for now the option is ignored with a warning.
+  - `--tmb_coding_only` counts only coding consequences, and only when the VCF carries a VEP `CSQ` or SnpEff `ANN` annotation. The final consensus VCFs are not annotated, so for now the option is ignored with a warning.
 
 | Option | Default |
 |--------|---------|
@@ -166,11 +166,11 @@ Ensembl VEP (offline cache) and vcf2maf run on the consensus calls after POST, f
 | `--vep_cache_version` | `112` | Must match the ensembl-vep release in `yml/vep.yml` |
 | `--vep_assembly` | `--genome` | `GRCh38` or `GRCh37` |
 | `--vep_fasta` | `--ref` | FASTA for HGVS and vcf2maf; same contig names as the VCFs |
-| `--vep_scenario` | `scenario_5` | Which paired consensus to annotate: `POST/standard_vcf/<patient>_<sample>_<scenario>_standard_PASSed.vcf` |
+| `--vep_scenario` | `scenario_5` | Which paired consensus to annotate: `POST/<patient>_<sample>/<scenario>/<id>_final.vcf` |
 
 What is annotated:
 
-- Paired: the standard consensus VCF of `--vep_scenario`. The default `scenario_5` keeps calls that PASS in each contributing caller and the DKFZ bias filter, without scenario 6's extra TLOD/SEVS cut-offs, which mostly remove low-VAF calls. Scenarios 3 and 4 do not require a per-caller PASS. These standard VCFs have no sample columns, so the MAF depth and count columns (`t_depth`, `t_alt_count`, `n_*`) are empty for paired rows.
+- Paired: the final consensus VCF of `--vep_scenario`. The default `scenario_5` keeps calls that PASS in each contributing caller and the DKFZ bias filter, without scenario 6's extra TLOD/SEVS cut-offs, which mostly remove low-VAF calls. Scenarios 3 and 4 do not require a per-caller PASS. These consensus VCFs have no sample columns, so the MAF depth and count columns (`t_depth`, `t_alt_count`, `n_*`) are empty for paired rows.
 - Tumour-only: `POST/tumor_only/<patient>_<sample>/*_tumor_only_consensus.PASS.vcf.gz`. Depths come from Mutect2's tumour column. `Matched_Norm_Sample_Barcode` is `NORMAL`, vcf2maf's default for tumour-only VCFs.
 
 VEP runs with the flags vcf2maf uses, plus `--mane`. The picked transcript (`PICK`) prefers MANE Select, then the Ensembl canonical transcript. vcf2maf reports the canonical transcript of the most severely affected gene, which in Ensembl 112 is the MANE Select transcript for most protein-coding genes. MANE IDs are kept as `MANE_SELECT`/`MANE_PLUS_CLINICAL` columns. Multi-allelic records are split, so each ALT allele gets one MAF row. Each task fails if the VEP VCF or the MAF has a different number of records than its input. Sample barcodes follow the caller VCF columns: `<patient>_<sample>_tumor` and `<patient>_<normal sample>_normal`.
@@ -257,7 +257,7 @@ bash Modules/PCGR/install_pcgr.sh $D vep GRCh38       # Ensembl VEP 115 cache, 2
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| `--pcgr_scenario` | `5` | Which paired consensus feeds PCGR: `POST/standard_vcf/<id>/<id>_scenario_N_standard_PASSed.vcf`, N = 3 or 4 (2-of-4 SNV / 2-of-3 indel over all caller records), 5 (only records that PASS in each caller, plus the DKFZ bias filter) or 6 (5 with Mutect2 TLOD ≥ 10 and Strelka2 SomaticEVS ≥ 13) |
+| `--pcgr_scenario` | `5` | Which paired consensus feeds PCGR: `POST/<id>/scenario_N/<id>_final.vcf`, N = 3 or 4 (2-of-4 SNV / 2-of-3 indel over all caller records), 5 (only records that PASS in each caller, plus the DKFZ bias filter) or 6 (5 with Mutect2 TLOD ≥ 10 and Strelka2 SomaticEVS ≥ 13) |
 | `--pcgr_assay` | from `--type` | `TARGETED` for panel, `WES` for exome, `WGS` for genome |
 | `--pcgr_effective_target_size_mb` | merged `--targets` size | TMB denominator. Without `--targets`, 34 Mb (PCGR's coding exome); capped at 34 |
 | sheet column `tumor_site` | `--pcgr_tumor_site 0` | Optional PCGR primary-site code per tumour row (0 any, 6 breast, 9 colon/rectum, 15 lung, 23 prostate, …; full list in `pcgr --help`). Focuses biomarker matching and signature priors |
@@ -268,7 +268,7 @@ bash Modules/PCGR/install_pcgr.sh $D vep GRCh38       # Ensembl VEP 115 cache, 2
 | `--pcgr_cna_from_purecn` | off | Hook: use PureCN allele-specific segments as PCGR `--input_cna` (converter `Modules/PCGR/purecn_to_pcgr_cna.py`; wire `PURECN` where main.nf marks the hook) |
 | `--pcgr_extra_args` | | Passed to `pcgr` verbatim (e.g. `--vep_gencode_basic`) |
 
-**Input VCF.** PCGR reads tumour depth and allele fraction only from INFO. The paired standard VCF has no FORMAT columns, so `Modules/PCGR/pcgr_prepare_vcf.py` keeps CHROM/POS/REF/ALT of the consensus and writes `TDP`/`TAF` (tumour) and `NDP`/`NAF` (matched normal) from the callers' FORMAT read counts: Mutect2 AD/DP, else SAGE AD/DP, else Strelka2 tier-1 counts (`TVAF_SRC` says which). Tumour-only input is `POST/tumor_only/<id>/<id>_tumor_only_consensus.PASS.vcf.gz`, whose Mutect2 FORMAT AD/DP give `TDP`/`TAF`. Only chromosomes 1–22, X, Y are kept. PCGR runs with `--tumor_dp_tag TDP --tumor_af_tag TAF` (and `--control_dp_tag NDP --control_af_tag NAF` for pairs) and `--tumor_only` for tumour-only patients.
+**Input VCF.** PCGR reads tumour depth and allele fraction only from INFO. The paired final consensus VCF has no FORMAT columns, so `Modules/PCGR/pcgr_prepare_vcf.py` keeps CHROM/POS/REF/ALT of the consensus and writes `TDP`/`TAF` (tumour) and `NDP`/`NAF` (matched normal) from the callers' FORMAT read counts: Mutect2 AD/DP, else SAGE AD/DP, else Strelka2 tier-1 counts (`TVAF_SRC` says which). Tumour-only input is `POST/tumor_only/<id>/<id>_tumor_only_consensus.PASS.vcf.gz`, whose Mutect2 FORMAT AD/DP give `TDP`/`TAF`. Only chromosomes 1–22, X, Y are kept. PCGR runs with `--tumor_dp_tag TDP --tumor_af_tag TAF` (and `--control_dp_tag NDP --control_af_tag NAF` for pairs) and `--tumor_only` for tumour-only patients.
 
 **Caveats for panels.** PCGR predicts MSI only for WES/WGS tumour–normal data, so it is off for `--type panel` and for tumour-only patients (use the MSIsensor-pro step). PCGR TMB on a panel smaller than 1 Mb is not robust, and the clean target BED also counts intronic and UTR baits, so set `--pcgr_effective_target_size_mb` to the panel's coding footprint when you know it. Signature fitting needs at least `--pcgr_min_mutations_signatures` SNVs (200; minimum 100), which most panels do not reach, so it is skipped. Tumour-only TMB and signatures still include rare germline variants. OncoKB annotation is off: it needs a licensed API token (`--pcgr_extra_args "--oncokb_api_token …"`).
 

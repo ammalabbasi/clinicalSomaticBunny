@@ -57,6 +57,9 @@ The SomaticBunny pipeline workflow is divided into multiple steps that can be ru
 > selected genome). `--type exome` does not restrict calling to exome targets. It only switches
 > Strelka and Manta to `--exome` mode, MuSE to `-E`, base quality score recalibration to the
 > exome interval list, and mosdepth and ASCAT to their exome resources.
+>
+> **`--type panel` is different:** with `--targets` it DOES restrict calling to the padded panel
+> targets (call regions, interval shards, clean BED) - see [clinical-panels.md](clinical-panels.md).
 
 #### Available Tools
 
@@ -66,8 +69,14 @@ Use the `--tool` parameter to specify which variant callers to run. You can sele
 |----------|----------------|-------------|
 | SV Callers | `manta` | Structural variant and indel caller |
 | | `delly` | Integrated structural variant detection |
-| CNV Callers | `ascat` | Allele-specific copy number analysis (requires sex information) |
+| CNV Callers | `ascat` | Allele-specific copy number analysis (requires sex information; WGS/WES only) |
 | | `cnvkit` | Copy number variation detection from targeted DNA sequencing |
+| | `purecn` | Purity, ploidy, integer copy number and LOH on top of CNVkit ([clinical-panels.md](clinical-panels.md)) |
+| Biomarkers | `tmb` | Tumour mutational burden per callable Mb |
+| | `msi` | MSIsensor-pro, paired and tumour-only vs a baseline |
+| Annotation | `vep` | VEP + vcf2maf: annotated VCFs, per-sample and cohort MAFs |
+| QC | `somalier` | Sample identity: duplicates, swaps, sex (works tumour-only) |
+| Reporting | `pcgr` | Clinician-readable tiered report per tumour |
 
 Example of running multiple tools:
 ```bash

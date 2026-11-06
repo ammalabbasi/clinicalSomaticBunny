@@ -31,9 +31,12 @@ The sample sheet mixes paired, tumour-only and normal-only patients freely:
 patient,sample,status,bam,bai
 P01,A,normal,P01_N.bam,P01_N.bam.bai
 P01,A,tumor,P01_T.bam,P01_T.bam.bai
-P02,A,tumor,P02_T.bam,P02_T.bam.bai        # tumour-only: runs natively
-POOL1,A,normal,N1.bam,N1.bam.bai           # normal-only: feeds the per-assay resources
+P02,A,tumor,P02_T.bam,P02_T.bam.bai
+POOL1,A,normal,N1.bam,N1.bam.bai
 ```
+
+`P02` has no normal row, so it runs tumour-only natively; `POOL1` is normal-only and feeds the per-assay
+resources (PON, PureCN normal DB, MSI baseline).
 
 ## Running panel data: the modes
 
