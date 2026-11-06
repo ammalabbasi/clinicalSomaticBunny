@@ -24,10 +24,10 @@ export TMPDIR=/path/to/restricted/folder/
 export NXF_OPTS="-Djava.io.tmpdir=${TMPDIR} -Xms4g -Xmx16g"
 ```
 
-4. Run the pipeline, choosing where jobs run with `-profile` (see [Choosing Where Jobs Run](#choosing-where-jobs-run)). This example runs on TSCC:
+4. Run the pipeline, choosing where jobs run with `-profile` (see [Choosing Where Jobs Run](installation.md#choosing-where-jobs-run)). This example runs on TSCC:
 
 ```bash
-nextflow run main.nf -profile tscc_slurm,conda --type [genome|exome] --genome [GRCh38|GRCh37|mm39|RN7] --first_step [mapping|markdup|recalibration|variant_calling] --tool [ascat,manta,...] --database_path [/path/to/SomaticBunny_database] --ref [/path/to/ref/] --ref_fai [/path/to/ref_fai] --ref_dict [/path/to/ref_dict] --bed [/path/to/bed] --bed_tbi [/path/to/bed_tbi] -profile [conda, ...]
+nextflow run main.nf -profile tscc_slurm,conda --type [genome|exome|panel] --genome [GRCh38|GRCh37|mm39|RN7] --first_step [mapping|markdup|recalibration|variant_calling] --tool [ascat,manta,...] --database_path [/path/to/SomaticBunny_database] --ref [/path/to/ref/] --ref_fai [/path/to/ref_fai] --ref_dict [/path/to/ref_dict] --bed [/path/to/bed] --bed_tbi [/path/to/bed_tbi] -profile [conda, ...]
 ```
 
 ### Pipeline Steps and Tools

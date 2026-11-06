@@ -1,0 +1,4 @@
+sample	mode	source	n_variants	n_snv	n_indel	callable_bp	callable_Mb	TMB	regions_bp	min_depth	min_normal_depth	min_vaf	min_mapq	min_baseq	coding_only	germline_filter	excluded	warning
+QUIET_A	paired	scenario_4	0	0	0	239356	0.239356	0.0000	240000	50	20	0.05	20	20	off	off	none	callable_Mb<1 (0.2394 Mb): TMB is unreliable on this little territory
+PAIR1_A	paired	scenario_4	20	20	0	239547	0.239547	83.4909	240000	50	20	0.05	20	20	off	off	none	callable_Mb<1 (0.2395 Mb): TMB is unreliable on this little territory
+TONLY1_A	tumor_only	tumor_only_consensus	22	22	0	239551	0.239551	91.8385	240000	50	NA	0.05	20	20	off	off	none	callable_Mb<1 (0.2396 Mb): TMB is unreliable on this little territory

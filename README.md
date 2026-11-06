@@ -87,13 +87,14 @@ Cohorts with no normals at all (e.g. CARIS-style archives) run tumour-only with 
 | [docs/usage.md](docs/usage.md) | general usage, entry points, custom references, advanced options, outputs |
 | [docs/clinical-panels.md](docs/clinical-panels.md) | the full clinical reference: every panel/tumour-only feature, biomarker tools, parameters and caveats |
 | [docs/tools.md](docs/tools.md) | every tool package, pinned version and what it is used for |
+| [docs/example-output.md](docs/example-output.md) | the full output folder of a synthetic run, annotated, with real example tables |
 | [docs/benchmark.md](docs/benchmark.md) | synthetic validation results and the nf-core/sarek comparison |
 
 ## Output
 
 One folder per tool under `--outdir` (consensus VCFs with their generating commands in the header, CNVkit/PureCN,
 TMB/MSI tables, MAFs, somalier, MultiQC, PCGR reports) plus `REPORT/` with run-level tables
-(`consensus_status.tsv`, `identity_flags.tsv`). Details in [docs/usage.md](docs/usage.md).
+(`consensus_status.tsv`, `identity_flags.tsv`). See the annotated example in [docs/example-output.md](docs/example-output.md).
 
 > On real data, PCGR reports and most outputs are patient-level clinical results: keep `--outdir` on a protected
 > filesystem and never commit or share them.

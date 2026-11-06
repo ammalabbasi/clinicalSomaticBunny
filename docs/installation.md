@@ -4,16 +4,16 @@
 
 ## What the pipeline is
 
-The SomaticBunny pipeline integrates multiple variant calling tools to improve detection accuracy for:
+clinicalSomaticBunny builds on SomaticBunny, which integrates multiple variant calling tools to improve detection accuracy for:
 - Single Nucleotide Variants (SNVs)
 - Insertions and Deletions (INDELs)
 - Structural Variants (SVs)
 - Copy Number Variants (CNVs)
 
-This pipeline is designed to work with paired tumor-normal whole-genome or whole-exome sequencing data.
+The original pipeline was designed for paired tumour-normal whole-genome or whole-exome data; **clinicalSomaticBunny** extends it to targeted panels, tumour-only patients and vendor-processed BAMs (see [clinical-panels.md](clinical-panels.md)).
 
 <p align="center">
-  <img src="https://github.com/AlexandrovLab/SomaticBunny/blob/main/workflow_logo/SomaticBunny.png" alt="SomaticBunny Pipeline Workflow"/>
+  <img src="clinical_somaticbunny_workflow.svg" alt="clinicalSomaticBunny workflow"/>
 </p>
 
 ## Prerequisites

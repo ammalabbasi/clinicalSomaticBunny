@@ -1,0 +1,2 @@
+patient	sample	mode	sites_evaluated	unstable_sites	msi_score_pct	threshold_pct	status	qc
+PAIR1	A	paired	526	2	0.38	10	MSS	PASS

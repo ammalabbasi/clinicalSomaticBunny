@@ -1,0 +1,2 @@
+patient	sample	mode	sites_evaluated	unstable_sites	msi_score_pct	threshold_pct	status	qc
+TONLY1	A	tumor_only	497	26	5.23	20	MSS	PASS

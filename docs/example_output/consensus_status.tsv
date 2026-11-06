@@ -1,0 +1,9 @@
+patient_sample	scenario	n_snv	n_indel	status
+QUIET_A	scenario_5	0	0	NO_CONSENSUS_MUTATIONS
+PAIR1_A	scenario_4	20	0	OK
+QUIET_A	scenario_3	49	0	OK
+PAIR1_A	scenario_6	20	0	OK
+QUIET_A	scenario_4	0	0	NO_CONSENSUS_MUTATIONS
+QUIET_A	scenario_6	0	0	NO_CONSENSUS_MUTATIONS
+PAIR1_A	scenario_5	20	0	OK
+PAIR1_A	scenario_3	62	0	OK

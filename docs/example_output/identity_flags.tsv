@@ -1,0 +1,5 @@
+flag	sample_a	sample_b	patient_a	patient_b	relatedness	n_sites	threshold	detail
+duplicate	PAIR1_A_normal	TONLY1_A_tumor	PAIR1	TONLY1	1.000	801	0.7	different patients but relatedness 1.000 >= 0.7: same individual (duplicate or mislabel)
+duplicate	PAIR1_A_tumor	TONLY1_A_tumor	PAIR1	TONLY1	1.000	806	0.7	different patients but relatedness 1.000 >= 0.7: same individual (duplicate or mislabel)
+duplicate	POOL2_A_normal	QUIET_A_normal	POOL2	QUIET	1.000	1550	0.7	different patients but relatedness 1.000 >= 0.7: same individual (duplicate or mislabel)
+duplicate	POOL2_A_normal	QUIET_A_tumor	POOL2	QUIET	1.000	1550	0.7	different patients but relatedness 1.000 >= 0.7: same individual (duplicate or mislabel)

@@ -1,0 +1,2 @@
+sample	mode	source	n_variants	n_snv	n_indel	callable_bp	callable_Mb	TMB	regions_bp	min_depth	min_normal_depth	min_vaf	min_mapq	min_baseq	coding_only	germline_filter	excluded	warning
+PAIR1_A	paired	scenario_4	20	20	0	239547	0.239547	83.4909	240000	50	20	0.05	20	20	off	off	none	callable_Mb<1 (0.2395 Mb): TMB is unreliable on this little territory
