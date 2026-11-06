@@ -76,4 +76,7 @@ workflow PURECN_WF {
     emit:
     purity_ploidy = PURECN.out.purity_ploidy
     segments = PURECN.out.segments
+    // >>> gene_status
+    loh = PURECN.out.loh
+    // <<< gene_status
 }

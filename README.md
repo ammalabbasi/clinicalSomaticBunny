@@ -82,6 +82,20 @@ nextflow run main.nf ... --tool cnvkit,purecn,tmb,msi,vep,somalier,pcgr \
 Cohorts with no normals at all (e.g. CARIS-style archives) run tumour-only with `--cnvkit_reference auto`
 (flat reference) and the database PON; see [docs/clinical-panels.md](docs/clinical-panels.md).
 
+<!-- >>> gene_status -->
+Adding `gene_status` to `--tool` in mode 6 also writes a per-gene somatic status per tumour — covered panel
+genes scored as `WT` / `MUTATED` / `AMP` / `DEL+LOH` / `NOT_CALLABLE` … from coverage, the consensus calls and
+the CNVkit/PureCN copy number (`REPORT/gene_status/`, plus a genes × samples matrix):
+
+```bash
+nextflow run main.nf ... --tool cnvkit,purecn,tmb,msi,vep,gene_status \
+    --genes_bed genes.bed      # or a --targets BED whose 4th column names the gene
+```
+
+`bin/make_genes_bed.py` builds the genes BED from a public Ensembl/GENCODE GTF; details and caveats in
+[docs/clinical-panels.md](docs/clinical-panels.md).
+<!-- <<< gene_status -->
+
 ## Documentation
 
 | Page | Contents |

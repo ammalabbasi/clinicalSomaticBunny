@@ -29,6 +29,9 @@ process PURECN {
     output:
     tuple val(map), path("${map.patient}_${map.tumor_meta.sample}.csv"), emit: purity_ploidy
     tuple val(map), path("${map.patient}_${map.tumor_meta.sample}_dnacopy.seg"), emit: segments
+    // >>> gene_status
+    tuple val(map), path("${map.patient}_${map.tumor_meta.sample}_loh.csv"), optional: true, emit: loh
+    // <<< gene_status
     path("${map.patient}_${map.tumor_meta.sample}{.rds,.log,*.pdf,_genes.csv,_loh.csv,_variants.csv,_amplification_pvalues.csv,.vcf.gz,.vcf.gz.tbi}"), emit: all
     path("${map.patient}_${map.tumor_meta.sample}_purity_check.tsv"), optional: true, emit: purity_check
 

@@ -27,6 +27,7 @@ with the reference database.
 | | PureCN | 2.16.1 | purity, ploidy, integer CN, LOH; per-assay normal DB | `yml/purecn.yml` |
 | Biomarkers | MSIsensor-pro | 1.3.0 | MSI paired + tumour-only vs baseline | `yml/msisensor_pro.yml` |
 | | TMB module | - | mutations per callable Mb | `yml/tmb.yml` |
+| | gene_status module | python 3.12 / pysam 0.22.1 / mosdepth 0.3.14 | per-gene status: coverage + consensus variants + CN | `yml/gene_status.yml` |
 | Annotation | Ensembl VEP | 112.0 | offline annotation (pinned cache) | `yml/vep.yml` |
 | | vcf2maf | 1.6.22 | per-sample MAF + cohort MAF | `yml/vep.yml` |
 | Identity QC | somalier | 0.3.7 | duplicates, swaps, sex (works tumour-only) | `yml/somalier.yml` |

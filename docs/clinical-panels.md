@@ -112,6 +112,54 @@ When callable territory is under 1 Mb, the `warning` column and the run log say 
 
 Outputs: `MSI/paired/<patient>_<sample>/` and `MSI/tumor_only/<patient>_<sample>/` hold the raw MSIsensor-pro files and `<patient>_<sample>.msi_status.tsv`. `MSI/msi_summary.tsv` has one row per tumour: `patient, sample, mode, sites_evaluated, unstable_sites, msi_score_pct, threshold_pct, status (MSI-H|MSS), qc (PASS|LOW_SITES)`. Paired and tumour-only scores are on different scales, so do not compare them with one cut-off. Check both thresholds on your assay with samples of known MSI status (IHC/PCR) before using the status.
 <!-- <<< msi -->
+<!-- >>> gene_status -->
+#### Per-gene somatic status (`--tool gene_status`)
+
+One row per covered panel gene and tumour (pairs and tumour-only patients, from every entry point,
+`--genome GRCh38|GRCh37`), combining coverage, the consensus small-variant calls and copy number into a single
+status string such as `WT`, `MUTATED`, `AMP`, `DEL+LOH` or `MUTATED+AMP`.
+
+- **Covered genes**: a 4-column genes BED (chrom, start, end, gene name) intersected with the padded `--targets`.
+  The BED is `--genes_bed` when given, else the 4th column of `--targets`; with neither the run stops.
+  `bin/make_genes_bed.py` builds a genes BED from any public Ensembl/GENCODE GTF (optionally restricted to a gene
+  list, protein-coding only, with `--add-chr` for Ensembl contig names). A gene with no targeted bp does not
+  appear at all (NOT_COVERED is omitted).
+- **Callable fraction**: targeted bases of the gene with tumour depth ≥ `--gene_status_min_depth` (from
+  `mosdepth --quantize`; reads of MAPQ ≥ `--gene_status_min_mapq`, no duplicates/secondary/supplementary/QC-fail).
+  Below `--gene_status_min_callable` the gene's status is `NOT_CALLABLE`, whatever else was seen.
+- **SNVs/indels**: the same consensus the other tools read — pairs the POST consensus of `--tmb_scenario`,
+  tumour-only `POST/tumor_only/*_tumor_only_consensus.PASS.vcf.gz`. With `--tool vep` the VEP-annotated VCFs are
+  used instead (pairs then follow `--vep_scenario`), adding the worst VEP consequence and the annotated SYMBOLs
+  per gene. A variant belongs to a gene when its `POS` falls in the gene's targeted intervals; one count per ALT.
+- **Copy number**: with `--tool cnvkit`, the integer `cn` of the `*_calls.cns` segment with the largest overlap
+  with the gene; with `--tool purecn`, PureCN's integer `C` and minor copy `M` from `*_loh.csv` the same way.
+  Both are reported; the status uses PureCN when present, else CNVkit (`cn_source` says which): `AMP` (cn ≥ 5),
+  `GAIN` (cn > 2), `DEL` (cn < 2), `DEEP_DEL` (cn = 0), plus `LOH` when PureCN has M = 0 with C > 0.
+  Without either CN tool the status reflects mutations only.
+
+| Option | Default |
+|--------|---------|
+| `--genes_bed` | 4th column of `--targets` |
+| `--gene_status_min_depth` | `50` |
+| `--gene_status_min_callable` | `0.5` |
+| `--gene_status_min_mapq` | `20` |
+
+Outputs go to `REPORT/gene_status/`:
+
+- `<patient>_<sample>.gene_status.tsv`: one row per covered gene — coordinates, `targeted_bp`, `callable_bp`,
+  `callable_frac`, `n_snv`, `n_indel`, `worst_consequence`, `vep_symbol`, `cnvkit_cn`, `purecn_cn`,
+  `purecn_minor_cn`, `cn_source`, `status` (column key in `Modules/GENE_STATUS/GENE_STATUS.nf`).
+- `gene_status_matrix.tsv`: genes × samples, the status strings (`.` where a gene has no row for a sample).
+
+Caveats. CN calls on small panels are only as good as their reference: a flat CNVkit reference supports large
+events only, single-gene panels give PureCN little to segment, and the AMP/GAIN/DEL cut-offs are unadjusted
+integer copies (no ploidy or purity correction beyond what PureCN itself does). Gene names are only as good as
+the genes BED: the coordinate intersection, not the name, assigns variants and segments, so a stale BED
+mislabels rows (compare `vep_symbol` against `gene` when `--tool vep` is on). `MUTATED` means "in the consensus":
+tumour-only consensus still contains rare germline variants, and `WT` only speaks for the callable fraction of
+the targeted gene — panel genes with `callable_frac` just above the threshold can hide variants in the
+uncallable remainder.
+<!-- <<< gene_status -->
 <!-- >>> umi -->
 #### UMI consensus instead of MarkDuplicates (`--umi`, FASTQ entry only)
 

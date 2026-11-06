@@ -179,6 +179,19 @@ if (!(params.tmb_scenario.toString() in ['4', '5', '6'])) {
     error "--tmb_scenario must be 4, 5 or 6 (scenario 3 output is not PASS-gated)."
 }
 // <<< tmb
+// >>> gene_status
+// Per-gene somatic status (--tool gene_status): one row per covered panel gene and tumour, combining callable
+// coverage (mosdepth), the consensus SNV/indel calls (VEP-annotated when --tool vep is on), CNVkit copy number
+// and PureCN integer CN/LOH when those tools ran. Covered genes = genes BED ∩ padded --targets. The genes BED
+// is --genes_bed, else the 4th column of --targets (bin/make_genes_bed.py builds one from an Ensembl/GENCODE
+// GTF). Paired variants come from the POST consensus of --tmb_scenario (or --vep_scenario when vep is on).
+params.genes_bed = null                       // 4-column BED: chrom, start, end, gene name
+params.gene_status_min_depth = 50             // tumour depth for a targeted base of a gene to count as callable
+params.gene_status_min_callable = 0.5         // callable fraction below this -> status NOT_CALLABLE
+params.gene_status_min_mapq = 20              // reads counted by mosdepth for depth
+params.gene_status_dir = "${params.results_dir}/REPORT/gene_status"
+params.gene_status_env = "$projectDir/yml/gene_status.yml"
+// <<< gene_status
 params.log_file = params.outdir ? "${params.outdir}/pipeline.log" : "$projectDir/pipeline.log"
 // >>> vep
 // --tool vep: Ensembl VEP (offline cache) + vcf2maf on the paired and tumour-only consensus VCFs (see README)
@@ -472,6 +485,54 @@ if (params.tool && params.tool.toString().split(',').collect { it.trim() }.conta
     }
 }
 // <<< tmb
+// >>> gene_status
+// Resolve the genes BED once (gunzip, drop track/browser/# lines, keep 4 columns, check contigs against --ref)
+// so the module and the -preview DAG read one clean file: --genes_bed, else the 4th column of --targets.
+def geneStatusGenes = null
+if (params.tool && params.tool.toString().split(',').collect { it.trim() }.contains('gene_status')) {
+    if (!params.targets) {
+        error "--tool gene_status needs --targets: covered genes are the genes BED intersected with the panel targets."
+    }
+    if (!(params.genome in ['GRCh38', 'GRCh37'])) {
+        error "--tool gene_status reads the POST consensus, which runs only for --genome GRCh38 or GRCh37."
+    }
+    def gsSrc, gsWhat
+    if (params.genes_bed) {
+        gsSrc = file(params.genes_bed)
+        if (!gsSrc.exists()) error "--genes_bed file not found: ${params.genes_bed}"
+        gsWhat = "--genes_bed ${params.genes_bed}"
+    } else {
+        gsSrc = file(params.targets)
+        gsWhat = "the 4th column of --targets ${params.targets}"
+    }
+    def gsRaw = gsSrc.name.endsWith('.gz') ?
+        new java.util.zip.GZIPInputStream(gsSrc.newInputStream()).newReader().readLines() : gsSrc.readLines()
+    def gsRows = gsRaw.findAll { it.trim() && !(it ==~ /^(track|browser|#).*/) }
+        .collect { it.split('\t') }
+        .findAll { it.size() >= 4 && it[3].trim() }
+    if (!gsRows) {
+        error "--tool gene_status found no gene names in ${gsWhat}. Give --genes_bed <BED: chrom,start,end,gene> " +
+              "or a --targets BED whose 4th column is the gene name (bin/make_genes_bed.py builds a genes BED " +
+              "from an Ensembl/GENCODE GTF)."
+    }
+    def gsFaiContigs = file(params.ref_fai).readLines().collect { it.split('\t')[0] } as Set
+    def gsMissing = gsRows.collect { it[0] }.unique().findAll { !(it in gsFaiContigs) }
+    if (gsMissing) {
+        error "gene_status genes BED uses contigs that are not in --ref: ${gsMissing.take(5).join(' ')} " +
+              "(chr prefix mismatch? bin/make_genes_bed.py --add-chr renames Ensembl contigs)"
+    }
+    def gsOut = new File("${params.results_dir}/custom_intervals/genes.clean.bed")
+    gsOut.parentFile.mkdirs()
+    def gsText = gsRows.collect { "${it[0]}\t${it[1]}\t${it[2]}\t${it[3].trim()}" }.join('\n') + '\n'
+    if (!gsOut.exists() || gsOut.text != gsText) {
+        gsOut.text = gsText
+    }
+    geneStatusGenes = gsOut.absolutePath
+    log.info "gene_status: ${gsRows.collect { it[3].trim() }.unique().size()} gene(s) from ${gsWhat}; " +
+             "min depth ${params.gene_status_min_depth}, min callable fraction ${params.gene_status_min_callable}"
+}
+params.gene_status_genes = geneStatusGenes
+// <<< gene_status
 params.muse_vcf = params.muse_vcf ?: params.genomes[params.genome].muse_vcf
 params.recal_knownsite1 = params.recal_knownsite1 ?: params.genomes[params.genome].recal_knownsite1
 params.recal_knownsite2 = params.recal_knownsite2 ?: params.genomes[params.genome].recal_knownsite2
@@ -886,6 +947,9 @@ include { PURECN_WF } from './Modules/PURECN/PURECN_WF'
 // >>> tmb
 include { TMB } from './Modules/TMB/TMB.nf'
 // <<< tmb
+// >>> gene_status
+include { GENE_STATUS; GENE_STATUS_MATRIX } from './Modules/GENE_STATUS/GENE_STATUS.nf'
+// <<< gene_status
 // >>> vep
 include { VEP_ANNOTATE } from './Modules/VEP/VEP_ANNOTATE.nf'
 include { VCF2MAF } from './Modules/VEP/VCF2MAF.nf'
@@ -2284,6 +2348,55 @@ workflow {
             }
         }
         // <<< tmb
+        // >>> gene_status
+        // Per-gene somatic status for every tumour (paired and tumour-only) from every entry point, reusing the
+        // channel sources of the TMB block above (recal_map_keyed / tumor_vaf pick the right BAMs per path).
+        // Variants: the VEP-annotated consensus when --tool vep is on (SYMBOL + worst consequence; paired follows
+        // --vep_scenario), else the plain consensus of --tmb_scenario (paired) / the tumour-only PASS consensus.
+        // Copy number: CNVkit *_calls.cns and PureCN *_loh.csv when those tools ran (optional joins).
+        if (params.tool && isToolSelected('gene_status')) {
+            def gsScenario = params.tmb_scenario.toString()
+            def gsVcfs
+            if (isToolSelected('vep')) {
+                gsVcfs = VEP_ANNOTATE.out.vcf.map { ps, mode, tid, nid, vcf ->
+                    [ps.toString(), mode, (mode == 'paired' ? "${params.vep_scenario}_vep" : 'tumor_only_consensus_vep').toString(), vcf]
+                }
+            } else {
+                def gsPairedVcf = [
+                    '4': POST_SCENARIOS.out.final_vcf_s4,
+                    '5': POST_SCENARIOS.out.final_vcf_s5,
+                    '6': POST_SCENARIOS.out.final_vcf_s6
+                ][gsScenario]
+                gsVcfs = gsPairedVcf.map { ps, vcf -> [ps.toString(), 'paired', "scenario_${gsScenario}".toString(), vcf] }
+                    .mix(POST_TUMOR_ONLY.out.consensus_pass.map { ps, vcf, tbi -> [ps.toString(), 'tumor_only', 'tumor_only_consensus', vcf] })
+            }
+            def gsBams = recal_map_keyed.map { ps, m -> [ps.toString(), m.tumor, m.tumor_bai] }
+                .mix(tumor_vaf.filter { it[0] in params.tumor_only_patients }
+                    .map { p, meta, bam, bai -> ["${p}_${meta.sample}".toString(), bam, bai] })
+            def gsMain = gsVcfs.join(gsBams)    // [ps, mode, source, vcf, bam, bai]
+
+            def gsCnvkit = isToolSelected('cnvkit') ?
+                CNVkit_out.CNVkit_cn_files.flatten()
+                    .filter { it.name.endsWith('_calls.cns') }
+                    .map { f -> [(f.name - ~/_calls\.cns$/).toString(), f] } :
+                Channel.empty()
+            def gsPurecn = isToolSelected('purecn') ?
+                PURECN_WF.out.loh.map { m, f -> ["${m.patient}_${m.tumor_meta.sample}".toString(), f] } :
+                Channel.empty()
+
+            def gsInput = gsMain.join(gsCnvkit, remainder: true)
+                .filter { it[1] in ['paired', 'tumor_only'] }
+                .map { row -> [row[0], row[1], row[2], row[3], row[4], row[5],
+                               (row.size() > 6 && row[6]) ? row[6] : []] }
+                .join(gsPurecn, remainder: true)
+                .filter { it[1] in ['paired', 'tumor_only'] }
+                .map { row -> [row[0], row[1], row[2], row[3], row[4], row[5], row[6],
+                               (row.size() > 7 && row[7]) ? row[7] : []] }
+
+            GENE_STATUS(gsInput, file(params.gene_status_genes), PREPARE_TARGETS.out.padded_bed.first())
+            GENE_STATUS_MATRIX(GENE_STATUS.out.gene_status_tsv.map { ps, tsv -> tsv }.collect())
+        }
+        // <<< gene_status
     }
 
     // >>> qc

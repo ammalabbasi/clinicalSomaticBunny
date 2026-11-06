@@ -1,0 +1,7 @@
+name: gene_status
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - mosdepth=0.3.14

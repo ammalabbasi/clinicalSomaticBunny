@@ -74,6 +74,7 @@ Use the `--tool` parameter to specify which variant callers to run. You can sele
 | | `purecn` | Purity, ploidy, integer copy number and LOH on top of CNVkit ([clinical-panels.md](clinical-panels.md)) |
 | Biomarkers | `tmb` | Tumour mutational burden per callable Mb |
 | | `msi` | MSIsensor-pro, paired and tumour-only vs a baseline |
+| | `gene_status` | Per-gene somatic status (coverage + consensus variants + CN) over the panel genes ([clinical-panels.md](clinical-panels.md)) |
 | Annotation | `vep` | VEP + vcf2maf: annotated VCFs, per-sample and cohort MAFs |
 | QC | `somalier` | Sample identity: duplicates, swaps, sex (works tumour-only) |
 | Reporting | `pcgr` | Clinician-readable tiered report per tumour |
