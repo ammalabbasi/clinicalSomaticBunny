@@ -65,5 +65,12 @@ process RENAME_BAM_HEADER {
     fi
 
     samtools index ${output_bam}
+
+    # Guard against silent output corruption (a bad node once wrote a truncated BAM with exit 0,
+    # and -resume kept reusing it): quickcheck + require the output to hold as many reads as the input.
+    samtools quickcheck ${output_bam}
+    n_in=\$(samtools view -c ${bam})
+    n_out=\$(samtools view -c ${output_bam})
+    [ "\$n_in" -eq "\$n_out" ] || { echo "ERROR: ${output_bam} has \$n_out reads, input had \$n_in" >&2; exit 1; }
     """
 }
