@@ -49,7 +49,7 @@ gnomAD) and SAGE, with a PASS-in-both consensus and population-frequency germlin
 **3 - No target BED?** Infer one from a few BAMs of the same assay, then run as mode 1:
 
 ```bash
-sbatch targets_from_coverage/infer_targets.sbatch   # keeps bases >= 20x in half the samples
+bash scripts/cohort_prep/infer_targets.sh bams.txt ref.fai outdir   # keeps bases >= 20x in half the samples
 ```
 
 **4 - Vendor BAMs on b37-style contigs** (1, 2, MT) against a chr-named database:
@@ -100,6 +100,7 @@ nextflow run main.nf ... --tool cnvkit,purecn,tmb,msi,vep,gene_status \
 
 | Page | Contents |
 |---|---|
+| [docs/new-cohort.md](docs/new-cohort.md) | **start here with your own data**: BAM checks, reference/targets prep, sheet, pilot, full run |
 | [docs/installation.md](docs/installation.md) | prerequisites, install, configuration, running on other SLURM clusters |
 | [docs/usage.md](docs/usage.md) | general usage, entry points, custom references, advanced options, outputs |
 | [docs/clinical-panels.md](docs/clinical-panels.md) | the full clinical reference: every panel/tumour-only feature, biomarker tools, parameters and caveats |
