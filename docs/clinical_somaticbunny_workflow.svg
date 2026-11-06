@@ -201,13 +201,14 @@
 
   <!-- biomarkers and QC -->
   <g font-size="17" font-weight="700" fill="#7a4f98" text-anchor="middle">
-    <rect x="96" y="1068" width="180" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="186" y="1093">VEP + vcf2maf</text>
-    <rect x="290" y="1068" width="120" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="350" y="1093">TMB / Mb</text>
-    <rect x="424" y="1068" width="250" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="549" y="1093">MSI (MSIsensor-pro)</text>
-    <rect x="688" y="1068" width="228" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="802" y="1093">somalier identity</text>
-    <rect x="930" y="1068" width="192" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1026" y="1093">MultiQC report</text>
+    <rect x="96" y="1068" width="235" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="213" y="1093">VEP + vcf2maf</text>
+    <rect x="343" y="1068" width="162" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="424" y="1093">TMB / Mb</text>
+    <rect x="517" y="1068" width="90" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="562" y="1093">MSI</text>
+    <rect x="619" y="1068" width="206" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="722" y="1093">gene status</text>
+    <rect x="837" y="1068" width="162" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="918" y="1093">somalier</text>
+    <rect x="1011" y="1068" width="148" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1085" y="1093">MultiQC</text>
+    <rect x="1171" y="1068" width="205" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1273" y="1093">PCGR report</text>
   </g>
-  <rect x="1136" y="1068" width="170" height="38" rx="5" fill="#eee6f5" stroke="#9366af"/><text x="1221" y="1093" font-size="17" font-weight="700" fill="#7a4f98" text-anchor="middle">PCGR report</text>
   <!-- legend -->
   <g font-size="16" fill="#526775">
     <rect x="64" y="1148" width="26" height="18" rx="4" fill="#eee6f5" stroke="#9366af"/>
