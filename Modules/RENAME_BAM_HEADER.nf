@@ -42,6 +42,18 @@ process RENAME_BAM_HEADER {
               if (extra) print "WARNING: " extra " BAM contig(s) are not in --ref; reads on them are ignored or may upset GATK" > "/dev/stderr" }' ${params.ref_fai} contig.hdr
     if ! cmp -s orig.hdr contig.hdr; then echo "renamed contigs to match --ref" >&2; fi
 
+    # Clinical (reviewer request, COMRADE): when both the BAM header and --ref_dict carry M5 sequence
+    # checksums, require them to MATCH per contig - same name+length with different sequence (e.g. a
+    # PAR-masked chrY) corrupts calling silently. Contigs without M5 on either side are not checked.
+    awk -F'\\t' '
+        FNR==NR { if (\$1=="@SQ") { n=""; m=""; for (i=2;i<=NF;i++) { if (\$i ~ /^SN:/) n=substr(\$i,4); if (\$i ~ /^M5:/) m=substr(\$i,4) }
+                  if (n != "" && m != "") ref[n]=m } ; next }
+        /^@SQ/ { n=""; m=""; for (i=2;i<=NF;i++) { if (\$i ~ /^SN:/) n=substr(\$i,4); if (\$i ~ /^M5:/) m=substr(\$i,4) }
+                 if (n != "" && m != "" && (n in ref) && ref[n] != m) { bad++; msg=msg " " n } }
+        END { if (bad) { print "ERROR: " bad " contig(s) have the same name/length but DIFFERENT sequence (M5) than --ref_dict:" msg
+                         print "       the BAMs were aligned to a different FASTA build; supply that FASTA as --ref (see docs/new-cohort.md)."
+                         exit 1 } }' ${params.ref_dict} contig.hdr >&2
+
     n_rg=\$(grep -c '^@RG' contig.hdr || true)
 
     if [ "\$n_rg" -gt 0 ]; then

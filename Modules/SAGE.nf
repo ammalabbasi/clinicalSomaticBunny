@@ -18,6 +18,10 @@ process SAGE {
 
     script:
     def reference_args = map.normal ? "-reference ${map.patient}_${map.normal_meta.sample}_normal -reference_bam ${map.normal}" : ""
+    // Clinical (reviewer request): deep panels use SAGE's high-depth thresholds; with no matched normal,
+    // -ref_sample_count 0 tells SAGE explicitly that zero reference samples are present.
+    def panel_args = params.targeted ? "-high_depth_mode" : ""
+    def tonly_args = map.normal ? "" : "-ref_sample_count 0"
     def xmx = task.memory ? (task.memory.mega * 0.8).intValue() : 4096
     """
     java -Xmx${xmx}M -cp ${params.SAGE_jar} com.hartwig.hmftools.sage.SageApplication \
@@ -32,6 +36,7 @@ process SAGE {
         -high_confidence_bed ${params.SAGE_high_confidence_bed} \
         -ensembl_data_dir ${params.SAGE_ref_dir}/common/ensembl_data \
         -output_vcf ${map.patient}_${map.tumor_meta.sample}.sage.vcf.gz \
+        ${panel_args} ${tonly_args} \
         -skip_msi_jitter
     """
 }

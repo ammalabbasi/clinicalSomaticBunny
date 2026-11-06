@@ -1641,13 +1641,19 @@ workflow {
             .flatMap { patient, metas, files, stages ->
                 def rows = [metas, files, stages].transpose()
                 def good = rows.findAll { m, f, s -> s == 'PASS' }
-                def has_normal = good.any { m, f, s -> m.status == 'normal' }
-                def has_tumor  = good.any { m, f, s -> m.status == 'tumor' }
-                if (!(has_normal && has_tumor)) {
-                    def missing = [has_normal ? null : 'normal', has_tumor ? null : 'tumor'].findAll()
-                    log.warn "Skipping patient ${patient}: no passing ${missing.join(' or ')} BAM"
+                if (!good) {
+                    log.warn "Skipping patient ${patient}: no BAM passed quickcheck"
                     return []
                 }
+                // Clinical: tumour-only and normal-only patients are valid here (tumour-only calling, pool
+                // normals for the per-assay resources). Only warn when quickcheck degraded a pair.
+                def has_normal = good.any { m, f, s -> m.status == 'normal' }
+                def has_tumor  = good.any { m, f, s -> m.status == 'tumor' }
+                def lost = rows.findAll { m, f, s -> s != 'PASS' }
+                if (has_tumor && !has_normal && lost.any { m, f, s -> m.status == 'normal' })
+                    log.warn "Patient ${patient}: normal BAM failed quickcheck -> continuing TUMOUR-ONLY"
+                if (has_normal && !has_tumor && lost.any { m, f, s -> m.status == 'tumor' })
+                    log.warn "Patient ${patient}: tumour BAM failed quickcheck -> normal kept for cohort resources only"
                 good.collect { m, f, s -> tuple(m.patient, m, f[0], f[1]) }
             }
             .set { RECAL_good }
@@ -1724,12 +1730,17 @@ workflow {
 
             // Tumour-only patients (no normal row): same maps with normal = null. Mutect2, SAGE, mosdepth and
             // CNVkit (against the pooled normals) handle that; Strelka2, MuSE, Conpair, ASCAT, Delly and Manta get pairs only.
-            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
-                [patient:patient, normal:null, tumor:bam, tumor_meta:meta, normal_meta:null]
-            }.set { TUMOR_ONLY_MAP }
-            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
-                [patient:patient, gender:meta.sex, normal:null, tumor:bam, sample:meta.sample]
-            }.set { TUMOR_ONLY_MAP_CN }
+            // QC-aware: tumour-only = declared in the sheet OR the patient's normal failed quickcheck.
+            // toList() emits [] when there are no normals at all, so all-tumour-only cohorts still flow.
+            def normals_present = normal.map { it[0] }.unique().toList()
+            tumor.combine(normals_present).filter { patient, meta, bam, bai, nset -> !(patient in nset) }
+                .map { patient, meta, bam, bai, nset ->
+                    [patient:patient, normal:null, tumor:bam, tumor_meta:meta, normal_meta:null]
+                }.set { TUMOR_ONLY_MAP }
+            tumor.combine(normals_present).filter { patient, meta, bam, bai, nset -> !(patient in nset) }
+                .map { patient, meta, bam, bai, nset ->
+                    [patient:patient, gender:meta.sex, normal:null, tumor:bam, sample:meta.sample]
+                }.set { TUMOR_ONLY_MAP_CN }
 
             if (params.genome in ['GRCh38', 'GRCh37']) {
                 SAGE(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
@@ -1916,12 +1927,17 @@ workflow {
 
             // Tumour-only patients (no normal row), as in the variant_calling entry: normal = null maps for
             // Mutect2, SAGE, mosdepth and CNVkit; Strelka2, MuSE, Conpair, ASCAT, Delly and Manta get pairs only.
-            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
-                [patient:patient, normal:null, tumor:bam, tumor_meta:meta, normal_meta:null]
-            }.set { TUMOR_ONLY_MAP }
-            tumor.filter { it[0] in params.tumor_only_patients }.map { patient, meta, bam, bai ->
-                [patient:patient, gender:meta.sex, normal:null, tumor:bam, sample:meta.sample]
-            }.set { TUMOR_ONLY_MAP_CN }
+            // QC-aware: tumour-only = declared in the sheet OR the patient's normal failed quickcheck.
+            // toList() emits [] when there are no normals at all, so all-tumour-only cohorts still flow.
+            def normals_present = normal.map { it[0] }.unique().toList()
+            tumor.combine(normals_present).filter { patient, meta, bam, bai, nset -> !(patient in nset) }
+                .map { patient, meta, bam, bai, nset ->
+                    [patient:patient, normal:null, tumor:bam, tumor_meta:meta, normal_meta:null]
+                }.set { TUMOR_ONLY_MAP }
+            tumor.combine(normals_present).filter { patient, meta, bam, bai, nset -> !(patient in nset) }
+                .map { patient, meta, bam, bai, nset ->
+                    [patient:patient, gender:meta.sex, normal:null, tumor:bam, sample:meta.sample]
+                }.set { TUMOR_ONLY_MAP_CN }
 
             if (params.genome in ['GRCh38', 'GRCh37']) {
                 SAGE(RECALIBRATE_out_MAP.mix(TUMOR_ONLY_MAP))
