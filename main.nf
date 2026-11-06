@@ -643,7 +643,8 @@ if (params.custom_ref) {
         [label: '--ref_dict',       path: params.ref_dict,         kind: 'dict'],
         [label: '--bed',            path: params.bed,              kind: 'bed', severity: 'warn'],
         [label: 'Mutect2 germline', path: params.mutect2_germline, kind: 'vcf'],
-        [label: 'Mutect2 PON',      path: params.mutect2_pon,      kind: 'vcf'],
+        // cohort-build runs never read the database/user PON, so skip its contig check (empty path = skipped)
+        [label: 'Mutect2 PON',      path: params.mutect2_cohort_pon ? '' : params.mutect2_pon, kind: 'vcf'],
         [label: 'MuSE dbSNP',       path: params.muse_vcf,         kind: 'vcf', severity: 'warn'],
     ]
     if (params.targeted)
